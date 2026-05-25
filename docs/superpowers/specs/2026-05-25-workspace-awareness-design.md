@@ -59,7 +59,7 @@ impl WorkspaceObserver {
 The app calls `set_active_display(Some(DisplayInfo { ... }))` whenever `DesktopPetApp::recompute_physics_bounds()` (or the equivalent block at `app.rs:220-247`) updates `active_monitor_name` — sourcing:
 - `bounds_logical` from `monitor.position()` and `monitor.size()` divided by `monitor.scale_factor()`,
 - `scale_factor` from `window.scale_factor()`,
-- `primary_display_height` from `event_loop.primary_monitor().size().height / scale_factor` (cached on the observer, the same on every call within a session unless displays are reconfigured).
+- `primary_display_height` from `event_loop.primary_monitor().size().height / event_loop.primary_monitor().scale_factor()` (using the **primary monitor's own scale factor**, NOT the pet display's `window.scale_factor()`, because on mixed-DPI setups the two can differ — sourcing from the wrong one would skew Y-flip for any cursor position on the primary display). Cached on the observer; recomputed only on display reconfiguration.
 
 Passing only `name` is not enough because monitor names are not unique and don't recover origin/size/scale.
 
@@ -128,7 +128,7 @@ The current `Cargo.toml` (the macOS target block, lines 18–34) only enables Ap
 
 | API used in spec | Crate | Feature to enable (or crate to add) |
 |---|---|---|
-| `NSWorkspace`, `NSWorkspace.frontmostApplication` | existing `objc2-app-kit = "0.3"` | add feature `"NSWorkspace"` to the existing target-specific features list |
+| `NSWorkspace`, `NSWorkspace.frontmostApplication` | existing `objc2-app-kit = "0.3"` | add features `"NSWorkspace"` AND `"NSRunningApplication"` (the latter is required for the return type of `frontmostApplication()` and for the `bundleIdentifier` accessor; without it the import does not compile) |
 | `NSEvent.mouseLocation` | existing `objc2-app-kit = "0.3"` | add feature `"NSEvent"` |
 | `NSScreen.frame`, `NSScreen.mainScreen` | existing `objc2-app-kit = "0.3"` | add feature `"NSScreen"` |
 | `NSControlStateValueOn/Off` | existing `objc2-app-kit = "0.3"` | covered by existing `"NSControl"` |
@@ -145,10 +145,12 @@ If any specific AX symbol turns out not to be exposed by `objc2-application-serv
   - New `Rect { min: Vec2, max: Vec2 }` type alongside the existing `Vec2` and `Bounds`, used by `WorkspaceSnapshot.caret_rect`, `DisplayInfo.bounds_logical`, and inside `decide_intent` for the pet-frame ∩ caret-rect test. Single canonical geometry type rather than re-inventing per module. Note: `Rect` does NOT appear in any `BehaviorIntent` variant — those carry only `Direction` (see pet.rs section below).
 
 - `src/workspace.rs` (~250 lines, new):
-  - `WorkspaceObserver` — owns last-known counter values, last-poll timestamps per source, AX permission state, cached editor-bundle-id list.
+  - `WorkspaceObserver` — owns last-known counter values, last-poll timestamps per source, AX permission state, cached editor-bundle-id list, a `prompted_for_accessibility_at_startup: bool` flag.
   - `fn tick(&mut self, now: Instant) -> &WorkspaceSnapshot` — polls all sources at their respective cadences, updates the snapshot, returns a reference. Called from the app's main loop.
-  - `fn request_accessibility_if_needed(&mut self)` — calls `AXIsProcessTrustedWithOptions(@{kAXTrustedCheckOptionPrompt: @YES})` once on startup if `avoid_text_cursor` is enabled.
-  - macOS-specific calls are behind `#[cfg(target_os = "macos")]`; other platforms get a stub `WorkspaceObserver` whose `tick` returns a default snapshot (idle = 0, no fullscreen, no caret, busy = false).
+  - **Two distinct AX-prompt entry points**, deliberately not unified:
+    - `fn request_accessibility_on_startup_if_enabled(&mut self)` — called once during `DesktopPetApp` init. No-op if `prompted_for_accessibility_at_startup == true` or `avoid_text_cursor == false`. On the first call where both gates pass, calls `AXIsProcessTrustedWithOptions(@{kAXTrustedCheckOptionPrompt: @YES})` and flips the flag. This is the "polite once on startup" semantics.
+    - `fn request_accessibility_now(&mut self)` — called in response to `AppCommand::RequestAccessibilityPermission`. Always calls `AXIsProcessTrustedWithOptions(@{kAXTrustedCheckOptionPrompt: @YES})` regardless of the `prompted_at_startup` flag. macOS itself decides whether to actually display the system dialog: if the user previously denied, macOS shows the dialog again only if the user has since removed the entry from System Settings → Privacy → Accessibility. If macOS suppresses the dialog because the choice is sticky, we surface a one-shot log line and (plan-stage) optionally open System Settings to the Accessibility pane via `x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility`. The user-initiated path never silently no-ops on the Rust side.
+  - macOS-specific calls are behind `#[cfg(target_os = "macos")]`; other platforms get a stub `WorkspaceObserver` whose `tick` returns a default snapshot (idle = 0, no fullscreen, no caret, busy = false) and whose two prompt entry points are no-ops.
 
 - `src/pet.rs` (extended):
   - New `BehaviorIntent` enum, **all variants pre-resolved to 1D**:
@@ -180,7 +182,7 @@ If any specific AX symbol turns out not to be exposed by `objc2-application-serv
   - The existing `set_pet_visible(&mut self, visible: bool)` is refactored: updates `self.pet_visible`, calls `self.pet.set_hidden(!visible)`, then calls `self.apply_window_visibility()` instead of calling `window.set_visible` and `next_tick_at` directly.
   - New method `set_auto_hidden(&mut self, hidden: bool)` on `DesktopPetApp`: updates `self.auto_hidden`, then calls `self.apply_window_visibility()`. Does NOT touch settings or save to disk. Does NOT call `sync_settings_window()` / `sync_menu_bar()` — auto-hide is invisible to the user-facing controls.
   - Tick cadence while auto-hidden: the tick loop continues to run so the workspace observer and pet state machine stay live. The redraw call inside `tick` is gated on `effective_window_visible()` — when hidden, no redraw is requested. This matches the existing pattern around `IDLE_FRAME_TIME` / `SLEEP_FRAME_TIME` (app.rs:33-35); we add a similar gate.
-  - Drag termination on auto-hide entry: before `set_auto_hidden(true)` flips the flag, the app inspects `self.interaction.is_dragging()` and synthesizes a drag-end if needed, to avoid the leaked held-mouse state called out in §"Error handling and degradation".
+  - Drag termination on auto-hide entry: before `set_auto_hidden(true)` flips the flag, the app inspects `self.interaction.is_dragging()`. If dragging, it routes a synthesized `InteractionEvent::DragEnded { pointer: last_known_pointer }` through the existing `handle_interaction_events` path (app.rs:680-685). That handler already does the full drag-end work: clears the pet drag flag, clamps physics, moves the window, and `persist_current_position()` saves the dropped location. Just clearing `InteractionState` without going through this path would lose the dragged position from settings — which is the bug the reviewer flagged.
 
 - `src/app.rs` (orchestration):
   - Owns a `WorkspaceObserver` and a `Settings`.
@@ -228,7 +230,7 @@ If any specific AX symbol turns out not to be exposed by `objc2-application-serv
   - `SetHideOnFullscreen(bool)`
   - `RequestAccessibilityPermission`
 
-  These are handled in `DesktopPetApp`'s command dispatch (alongside `SetPersonality`, `SetScale`, etc.). The three `Set*` variants update `self.settings.<field>`, call `save_settings()`, and on the next tick the new value gates `decide_intent` / `set_auto_hidden`. `RequestAccessibilityPermission` calls into `WorkspaceObserver::request_accessibility_if_needed()`.
+  These are handled in `DesktopPetApp`'s command dispatch (alongside `SetPersonality`, `SetScale`, etc.). The three `Set*` variants update `self.settings.<field>`, call `save_settings()`, and on the next tick the new value gates `decide_intent` / `set_auto_hidden`. `RequestAccessibilityPermission` calls `WorkspaceObserver::request_accessibility_now()` — the "always prompt regardless of startup-flag" path, not the startup-once path. The startup-once path (`request_accessibility_on_startup_if_enabled`) runs from `DesktopPetApp::init` instead.
 
 ## Data flow per tick
 
@@ -271,7 +273,7 @@ The snapshot is consumed and dropped per tick — no shared mutable state betwee
 
 ## Error handling and degradation
 
-**Accessibility permission.** First launch with `avoid_text_cursor` on: prompt once. If denied, `caret_rect` is always `None`, the `AvoidRect` arm of the decision tree never fires, and the rest of the features work normally. Settings exposes a "Re-request Accessibility permission" button to re-trigger the prompt. If the user grants it later via System Settings, the next poll picks it up automatically.
+**Accessibility permission.** First launch with `avoid_text_cursor` on: `request_accessibility_on_startup_if_enabled` prompts once and sets the internal `prompted_for_accessibility_at_startup` flag. If denied, `caret_rect` is always `None`, the `AvoidRectHorizontal` arm of the decision tree never fires, and the rest of the features work normally. Settings exposes a "Re-request Accessibility permission" button that calls `request_accessibility_now` — this path bypasses the startup-once flag and always invokes `AXIsProcessTrustedWithOptions` with the prompt option. Whether macOS actually shows a dialog is up to macOS (it may suppress repeat prompts after a recent denial); in that case the user must clear the entry in System Settings → Privacy & Security → Accessibility, then click the button again. If the user grants it later via System Settings without clicking the button, the next AX poll picks it up automatically.
 
 **Caret query failures.** If the focused element doesn't expose `kAXSelectedTextRangeAttribute` (canvas-based editors, some Catalyst apps, non-AX-friendly Electron builds), `caret_rect = None` for that poll. No error surfaced.
 
@@ -289,7 +291,7 @@ If `CGWindowListCopyWindowInfo` returns an error (rare, can happen during displa
 - Cursor on another display → chase/avoid still computes against global coords; the pet effectively walks to the edge of its display nearest the cursor, clamped by existing physics bounds.
 - Caret rect on another display → no intersection with the pet's frame, no avoidance triggered.
 
-**Drag-in-progress + fullscreen.** If the pet is being dragged when fullscreen begins, `set_auto_hidden(true)` first terminates the drag synchronously by clearing the `InteractionState` (drop dragging + hover flags) before flipping `auto_hidden` and calling `apply_window_visibility()`. Avoids leaked held-mouse state.
+**Drag-in-progress + fullscreen.** If the pet is being dragged when fullscreen begins, `set_auto_hidden(true)` first routes a synthesized `InteractionEvent::DragEnded { pointer: last_known }` through `handle_interaction_events` (the same path real drag-release uses, app.rs:680-685). That clears the pet's drag flag, clamps physics, moves the window, and persists the position via `persist_current_position()`. Only after the synthesized drag-end completes does the app flip `auto_hidden` and call `apply_window_visibility()`. Avoids both the leaked held-mouse state AND the loss of the dragged position.
 
 **Pet stuck near screen edge.** The existing physics module clamps to the configured bounds. New behavior only sets target direction; final position is always clamped by physics. No change needed.
 
@@ -340,9 +342,10 @@ If `CGWindowListCopyWindowInfo` returns an error (rare, can happen during displa
 
 Command dispatch (in `app.rs`):
 - `AppCommand::SetFollowCursorWhenIdle(false)` updates `self.settings.follow_cursor_when_idle` and calls `save_settings()`.
-- `AppCommand::SetAvoidTextCursor(true)` triggers `request_accessibility_if_needed()` on the observer.
+- `AppCommand::SetAvoidTextCursor(true)` triggers `request_accessibility_on_startup_if_enabled()` on the observer if the toggle is being turned on for the first time (after the startup window has passed, this is a no-op; the user gets the dialog via the Re-request button instead).
 - `AppCommand::SetHideOnFullscreen(false)` immediately allows next-tick `set_auto_hidden(false)` even if fullscreen is currently true.
-- `AppCommand::RequestAccessibilityPermission` calls into the observer's prompt path.
+- `AppCommand::RequestAccessibilityPermission` always calls `request_accessibility_now()` regardless of `prompted_for_accessibility_at_startup`. Fake observer test verifies the call lands every time it is dispatched, even after the startup-once path has already run.
+- `request_accessibility_on_startup_if_enabled()` is a no-op on the second call (idempotent), and a no-op when `avoid_text_cursor` is false at startup.
 
 Pure tag → command logic (extracted out of `command_target_macos.rs` for testability):
 - A new helper `pub(crate) fn settings_command_for_button(tag: isize, state_is_on: bool) -> Option<AppCommand>` lives in `menu_bar.rs` (alongside the existing `command_from_tag`). It is pure Rust — no Obj-C, no `unsafe`. The `dispatchSettingsValue:` arms for boolean checkboxes call this helper after reading `NSButton.state` into a plain `bool`. Unit tests target this pure helper:
