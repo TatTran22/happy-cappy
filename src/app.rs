@@ -400,9 +400,14 @@ impl DesktopPetApp {
     }
 
     fn show_context_menu(&self, local_position: Option<Vec2>) {
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+
         #[cfg(not(test))]
         {
             crate::window_macos::show_pet_context_menu(
+                window,
                 self.event_proxy.clone(),
                 self.pet_visible,
                 local_position,
@@ -413,6 +418,7 @@ impl DesktopPetApp {
         {
             if let Some(event_proxy) = self.event_proxy.as_ref() {
                 crate::window_macos::show_pet_context_menu(
+                    window,
                     event_proxy.clone(),
                     self.pet_visible,
                     local_position,
@@ -524,6 +530,21 @@ impl DesktopPetApp {
                 }
             }
         }
+    }
+
+    fn handle_cursor_left(&mut self) {
+        let screen_logical = self
+            .last_cursor_screen_position
+            .unwrap_or(self.physics.position);
+        let events = if self.interaction.is_dragging() {
+            self.interaction
+                .mouse_released(screen_logical, MouseButtonKind::Left, false)
+        } else {
+            self.interaction.pointer_moved(screen_logical, false)
+        };
+        self.handle_interaction_events(events);
+        self.last_cursor_local_position = None;
+        self.last_cursor_screen_position = None;
     }
 }
 
@@ -664,14 +685,7 @@ impl ApplicationHandler<AppCommand> for DesktopPetApp {
                 self.handle_interaction_events(events);
             }
             WindowEvent::CursorLeft { .. } => {
-                let screen_logical = self
-                    .last_cursor_screen_position
-                    .unwrap_or_else(|| self.cursor_screen_position(Vec2 { x: 0.0, y: 0.0 }));
-                let events = self.interaction.pointer_moved(screen_logical, false);
-                self.handle_interaction_events(events);
-                self.pet.set_hovered(false);
-                self.last_cursor_local_position = None;
-                self.last_cursor_screen_position = None;
+                self.handle_cursor_left();
             }
             WindowEvent::Resized(size) => {
                 if let Some(renderer) = self.renderer.as_mut() {
@@ -811,6 +825,32 @@ mod tests {
                 Vec2 { x: 12.0, y: 34.0 }
             ),
             Vec2 { x: 132.0, y: 124.0 }
+        );
+    }
+
+    #[test]
+    fn cursor_left_ends_active_drag_and_clears_cached_positions() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.settings_path = None;
+        app.physics.position = Vec2 { x: 120.0, y: 90.0 };
+        app.last_cursor_local_position = Some(Vec2 { x: 12.0, y: 34.0 });
+        app.last_cursor_screen_position = Some(Vec2 { x: 132.0, y: 124.0 });
+        app.interaction
+            .pointer_moved(Vec2 { x: 132.0, y: 124.0 }, true);
+        app.interaction
+            .mouse_pressed(Vec2 { x: 132.0, y: 124.0 }, MouseButtonKind::Left, true);
+        app.pet.set_hovered(true);
+        app.pet.set_dragging(true);
+
+        app.handle_cursor_left();
+
+        assert!(!app.interaction.is_dragging());
+        assert_eq!(app.pet.behavior_mode(), crate::pet::BehaviorMode::Default);
+        assert_eq!(app.last_cursor_local_position, None);
+        assert_eq!(app.last_cursor_screen_position, None);
+        assert_eq!(
+            app.settings.last_position,
+            Some(crate::settings::StoredPosition { x: 120.0, y: 90.0 })
         );
     }
 }

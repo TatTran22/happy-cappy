@@ -117,6 +117,7 @@ fn apply_platform_window_behavior(window: &Window) -> Result<(), WindowTweaksErr
 }
 
 pub fn show_pet_context_menu(
+    window: &Window,
     proxy: winit::event_loop::EventLoopProxy<crate::app::AppCommand>,
     pet_visible: bool,
     local_position: Option<crate::physics::Vec2>,
@@ -124,8 +125,9 @@ pub fn show_pet_context_menu(
     #[cfg(target_os = "macos")]
     {
         use objc2::{runtime::AnyObject, MainThreadOnly};
-        use objc2_app_kit::{NSMenu, NSMenuItem};
+        use objc2_app_kit::{NSMenu, NSMenuItem, NSView};
         use objc2_foundation::{ns_string, MainThreadMarker, NSPoint};
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
         let Some(mtm) = MainThreadMarker::new() else {
             return;
@@ -173,16 +175,22 @@ pub fn show_pet_context_menu(
         menu.addItem(&hide);
         menu.addItem(&reset);
         let local_position = local_position.unwrap_or(crate::physics::Vec2 { x: 0.0, y: 0.0 });
+        let ns_view = match window.window_handle().ok().map(|handle| handle.as_raw()) {
+            Some(RawWindowHandle::AppKit(handle)) => {
+                Some(unsafe { handle.ns_view.cast::<NSView>().as_ref() })
+            }
+            _ => None,
+        };
         menu.popUpMenuPositioningItem_atLocation_inView(
             None,
             NSPoint::new(local_position.x as f64, local_position.y as f64),
-            None,
+            ns_view,
         );
         let _keep_target_alive_until_menu_returns = target;
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (proxy, pet_visible, local_position);
+        let _ = (window, proxy, pet_visible, local_position);
     }
 }
