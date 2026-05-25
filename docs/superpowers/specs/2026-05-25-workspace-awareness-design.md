@@ -45,6 +45,10 @@ pub struct DisplayInfo {
     pub name: Option<String>,         // monitor.name(); diagnostic only, not unique
     pub bounds_logical: Rect,         // pet-space, top-left origin, points
     pub scale_factor: f32,            // window.scale_factor()
+    pub primary_display_height: f32,  // height in points of the primary display;
+                                      // used as the Y-flip pivot. Same for all
+                                      // DisplayInfo updates within a session unless
+                                      // displays are reconfigured.
 }
 
 impl WorkspaceObserver {
@@ -52,11 +56,14 @@ impl WorkspaceObserver {
 }
 ```
 
-The app calls `set_active_display(Some(DisplayInfo { ... }))` whenever `DesktopPetApp::recompute_physics_bounds()` (or the equivalent block at `app.rs:220-247`) updates `active_monitor_name` — sourcing `bounds_logical` from `position`/`size` divided by `scale_factor`, and `scale_factor` from `window.scale_factor()`. Passing only `name` is not enough because monitor names are not unique and don't recover origin/size/scale.
+The app calls `set_active_display(Some(DisplayInfo { ... }))` whenever `DesktopPetApp::recompute_physics_bounds()` (or the equivalent block at `app.rs:220-247`) updates `active_monitor_name` — sourcing:
+- `bounds_logical` from `monitor.position()` and `monitor.size()` divided by `monitor.scale_factor()`,
+- `scale_factor` from `window.scale_factor()`,
+- `primary_display_height` from `event_loop.primary_monitor().size().height / scale_factor` (cached on the observer, the same on every call within a session unless displays are reconfigured).
+
+Passing only `name` is not enough because monitor names are not unique and don't recover origin/size/scale.
 
 For the fullscreen check specifically: a window from `CGWindowListCopyWindowInfo` is "fullscreen on the pet's display" iff its bounds equal `active_display.bounds_logical` within 1 px on each side. Both sides are in points, top-left origin (Quartz), no per-display origin adjustment needed because `bounds_logical` already encodes the display's global origin and the `CGWindowList` bounds are in the same space.
-
-The primary-display height used by the Y-flip is also required state in the observer (collected at the same time the active display is updated). The app supplies it via the same `set_active_display` call (or a separate `set_primary_display_height` if the pet's display is not the primary).
 
 ## Signals and how they're observed
 
@@ -115,6 +122,23 @@ com.jetbrains.*                  // matched by prefix
 
 (Final list maintained in code; plan stage will confirm exact bundle IDs.)
 
+### Cargo / macOS dependencies
+
+The current `Cargo.toml` (the macOS target block, lines 18–34) only enables AppKit menu / panel / view features. The new APIs need additional bindings:
+
+| API used in spec | Crate | Feature to enable (or crate to add) |
+|---|---|---|
+| `NSWorkspace`, `NSWorkspace.frontmostApplication` | existing `objc2-app-kit = "0.3"` | add feature `"NSWorkspace"` to the existing target-specific features list |
+| `NSEvent.mouseLocation` | existing `objc2-app-kit = "0.3"` | add feature `"NSEvent"` |
+| `NSScreen.frame`, `NSScreen.mainScreen` | existing `objc2-app-kit = "0.3"` | add feature `"NSScreen"` |
+| `NSControlStateValueOn/Off` | existing `objc2-app-kit = "0.3"` | covered by existing `"NSControl"` |
+| `CGEventSourceSecondsSinceLastEventType`, `CGEventSourceCounterForEventType`, `CGWindowListCopyWindowInfo`, `CGWindowID`, `CGRect`, `CGPoint` | new `objc2-core-graphics = "0.3"` | add to the `cfg(target_os = "macos")` dependencies block |
+| `AXUIElementCreateSystemWide`, `AXUIElementCopyAttributeValue`, `AXValueGetValue`, `AXIsProcessTrustedWithOptions`, `AXUIElementSetMessagingTimeout`, `kAXFocusedUIElementAttribute`, `kAXSelectedTextRangeAttribute`, `kAXBoundsForRangeParameterizedAttribute`, `kAXTrustedCheckOptionPrompt` | new `objc2-application-services = "0.3"` (provides the HIServices / AX bindings under one umbrella crate) | add to the `cfg(target_os = "macos")` dependencies block |
+
+Plan stage will pin exact versions consistent with `objc2 = "0.6"`. The `objc2-core-graphics` and `objc2-application-services` crates are gated behind `#[cfg(target_os = "macos")]` so non-macOS builds remain dependency-free (the stub `WorkspaceObserver` referenced below does not pull these crates in).
+
+If any specific AX symbol turns out not to be exposed by `objc2-application-services` at the chosen version, the fallback is a small `extern "C"` block in `workspace.rs` declaring the C signatures directly and linking against `ApplicationServices` (`#[link(name = "ApplicationServices", kind = "framework")]`). Plan stage decides; the spec just commits to "AX bindings come from a single source, either the crate or a direct extern block".
+
 ### Module layout
 
 - `src/physics.rs` (extended):
@@ -152,9 +176,9 @@ com.jetbrains.*                  // matched by prefix
 - `src/app.rs` window-visibility composition (no new controller — `window_macos.rs` stays a collection of helper functions):
   - `DesktopPetApp` already owns `pet_visible: bool` (app.rs:72). Add a sibling field `auto_hidden: bool` (default false, runtime-only, never persisted to settings).
   - New private helper: `fn effective_window_visible(&self) -> bool { self.pet_visible && !self.auto_hidden }`.
-  - New private helper: `fn apply_window_visibility(&self)` — calls `window.set_visible(self.effective_window_visible())` plus the existing redraw/tick-resume logic that lives today inside `set_pet_visible` (app.rs:363-380).
-  - The existing `set_pet_visible(&mut self, visible: bool)` is refactored: updates `self.pet_visible`, then calls `apply_window_visibility()` instead of calling `window.set_visible` directly with the raw `visible` argument.
-  - New method `set_auto_hidden(&mut self, hidden: bool)` on `DesktopPetApp`: updates `self.auto_hidden`, then calls `apply_window_visibility()`. Does NOT touch settings or save to disk. Does NOT call `sync_settings_window()` / `sync_menu_bar()` — auto-hide is invisible to the user-facing controls.
+  - New private helper: `fn apply_window_visibility(&mut self)` — `&mut self` because it mutates `self.next_tick_at = Instant::now()` when transitioning to visible (matching the existing logic at `app.rs:374-376`). Calls `window.set_visible(self.effective_window_visible())`, `window.request_redraw()` when becoming visible, and resets `next_tick_at` when becoming visible. Encapsulates the redraw/tick-resume block currently inlined inside `set_pet_visible`.
+  - The existing `set_pet_visible(&mut self, visible: bool)` is refactored: updates `self.pet_visible`, calls `self.pet.set_hidden(!visible)`, then calls `self.apply_window_visibility()` instead of calling `window.set_visible` and `next_tick_at` directly.
+  - New method `set_auto_hidden(&mut self, hidden: bool)` on `DesktopPetApp`: updates `self.auto_hidden`, then calls `self.apply_window_visibility()`. Does NOT touch settings or save to disk. Does NOT call `sync_settings_window()` / `sync_menu_bar()` — auto-hide is invisible to the user-facing controls.
   - Tick cadence while auto-hidden: the tick loop continues to run so the workspace observer and pet state machine stay live. The redraw call inside `tick` is gated on `effective_window_visible()` — when hidden, no redraw is requested. This matches the existing pattern around `IDLE_FRAME_TIME` / `SLEEP_FRAME_TIME` (app.rs:33-35); we add a similar gate.
   - Drag termination on auto-hide entry: before `set_auto_hidden(true)` flips the flag, the app inspects `self.interaction.is_dragging()` and synthesizes a drag-end if needed, to avoid the leaked held-mouse state called out in §"Error handling and degradation".
 
@@ -176,15 +200,27 @@ com.jetbrains.*                  // matched by prefix
   pub const MENU_TAG_HIDE_ON_FULLSCREEN: isize = 1108;
   pub const MENU_TAG_REREQUEST_ACCESSIBILITY: isize = 1109;
   ```
-  `command_from_tag` gets a new arm for `MENU_TAG_REREQUEST_ACCESSIBILITY` returning `Some(AppCommand::RequestAccessibilityPermission)`. The three checkbox tags do NOT go in `command_from_tag` because they carry state — they are read inside `dispatchSettingsValue:` instead. No menu-bar menu items are added; these are settings-window tags only, matching how the existing `MENU_TAG_SCALE` etc. are used.
-
-- `src/command_target_macos.rs::dispatchSettingsValue:` (extended) — three new tag arms read `NSButton.state` (`NSControlStateValueOn = 1`, `NSControlStateValueOff = 0`) and emit the matching `AppCommand`:
+  `command_from_tag` gets a new arm for `MENU_TAG_REREQUEST_ACCESSIBILITY` returning `Some(AppCommand::RequestAccessibilityPermission)`. The three checkbox tags do NOT go in `command_from_tag` because they carry state. Instead, a new pure-Rust helper alongside `command_from_tag` is added:
   ```rust
-  MENU_TAG_FOLLOW_CURSOR_WHEN_IDLE => Some(AppCommand::SetFollowCursorWhenIdle(read_button_state(sender))),
-  MENU_TAG_AVOID_TEXT_CURSOR        => Some(AppCommand::SetAvoidTextCursor(read_button_state(sender))),
-  MENU_TAG_HIDE_ON_FULLSCREEN       => Some(AppCommand::SetHideOnFullscreen(read_button_state(sender))),
+  pub fn settings_command_for_button(tag: isize, state_is_on: bool) -> Option<AppCommand> {
+      match tag {
+          MENU_TAG_FOLLOW_CURSOR_WHEN_IDLE => Some(AppCommand::SetFollowCursorWhenIdle(state_is_on)),
+          MENU_TAG_AVOID_TEXT_CURSOR        => Some(AppCommand::SetAvoidTextCursor(state_is_on)),
+          MENU_TAG_HIDE_ON_FULLSCREEN       => Some(AppCommand::SetHideOnFullscreen(state_is_on)),
+          _ => None,
+      }
+  }
   ```
-  A small helper `fn read_button_state(sender: &AnyObject) -> bool { unsafe { msg_send![sender, state] as NSInteger } != 0 }` is added alongside the existing `read_double_value`.
+  `dispatchSettingsValue:` reads `NSButton.state` into a `bool` and forwards to this helper, keeping the Obj-C bridge thin and the testable logic pure. No menu-bar menu items are added; these are settings-window tags only, matching how the existing `MENU_TAG_SCALE` etc. are used.
+
+- `src/command_target_macos.rs::dispatchSettingsValue:` (extended) — for the three boolean tags, read the sender's `state` into a `bool` via a new local helper, then delegate to the pure `settings_command_for_button(tag, state_is_on)` defined in `menu_bar.rs`. The Obj-C-touching helper is a thin wrapper:
+  ```rust
+  fn read_button_state(sender: &AnyObject) -> bool {
+      let state: NSInteger = unsafe { msg_send![sender, state] };
+      state != 0  // NSControlStateValueOff = 0, On = 1, Mixed = -1 (treat any nonzero as on)
+  }
+  ```
+  This keeps the Obj-C surface minimal and lets unit tests exercise `settings_command_for_button` directly without an AppKit runtime.
 
 - `src/app.rs::AppCommand` (extended) — new variants:
   - `SetFollowCursorWhenIdle(bool)`
@@ -261,7 +297,7 @@ If `CGWindowListCopyWindowInfo` returns an error (rare, can happen during displa
 
 ## Testing
 
-### Unit tests (Rust, no macOS runtime required)
+### Unit tests — platform-independent (no macOS runtime required)
 
 `workspace.rs` — platform-independent logic:
 - `WorkspaceSnapshot::is_busy` truth table across (editor frontmost) × (typing rate above/below) × (idle above/below). 8 cases.
@@ -308,11 +344,21 @@ Command dispatch (in `app.rs`):
 - `AppCommand::SetHideOnFullscreen(false)` immediately allows next-tick `set_auto_hidden(false)` even if fullscreen is currently true.
 - `AppCommand::RequestAccessibilityPermission` calls into the observer's prompt path.
 
-Settings-control bridge (`command_target_macos.rs::dispatchSettingsValue:`):
-- Fake `NSButton`-like sender with `state = 1` and `tag = MENU_TAG_FOLLOW_CURSOR_WHEN_IDLE` → produces `AppCommand::SetFollowCursorWhenIdle(true)`.
-- Fake sender with `state = 0` and `tag = MENU_TAG_AVOID_TEXT_CURSOR` → produces `AppCommand::SetAvoidTextCursor(false)`.
-- `read_button_state` returns `false` for `state = 0`, `true` for `state = 1` and `state = NSControlStateValueMixed` (defensive: mixed treated as on).
-- `command_from_tag(MENU_TAG_REREQUEST_ACCESSIBILITY)` returns `Some(AppCommand::RequestAccessibilityPermission)`.
+Pure tag → command logic (extracted out of `command_target_macos.rs` for testability):
+- A new helper `pub(crate) fn settings_command_for_button(tag: isize, state_is_on: bool) -> Option<AppCommand>` lives in `menu_bar.rs` (alongside the existing `command_from_tag`). It is pure Rust — no Obj-C, no `unsafe`. The `dispatchSettingsValue:` arms for boolean checkboxes call this helper after reading `NSButton.state` into a plain `bool`. Unit tests target this pure helper:
+  - `settings_command_for_button(MENU_TAG_FOLLOW_CURSOR_WHEN_IDLE, true)` → `Some(AppCommand::SetFollowCursorWhenIdle(true))`.
+  - `settings_command_for_button(MENU_TAG_AVOID_TEXT_CURSOR, false)` → `Some(AppCommand::SetAvoidTextCursor(false))`.
+  - `settings_command_for_button(MENU_TAG_HIDE_ON_FULLSCREEN, true)` → `Some(AppCommand::SetHideOnFullscreen(true))`.
+  - `settings_command_for_button(MENU_TAG_SCALE, true)` → `None` (this tag is handled by a different `dispatchSettingsValue:` arm that reads a slider, not a button).
+- `command_from_tag(MENU_TAG_REREQUEST_ACCESSIBILITY)` returns `Some(AppCommand::RequestAccessibilityPermission)` — also pure Rust, also tested here.
+
+### Unit tests — macOS-only (require AppKit / Obj-C runtime, gated `#[cfg(target_os = "macos")]`)
+
+`command_target_macos.rs::dispatchSettingsValue:` end-to-end (these need a real Obj-C runtime because `msg_send![sender, state]` is real Obj-C dispatch):
+- Construct an `NSButton` with `setState:NSControlStateValueOn` and the appropriate tag, invoke `dispatchSettingsValue:`, observe that the right `AppCommand` is sent through a fake `EventLoopProxy`.
+- Same with `NSControlStateValueOff`.
+
+These tests live behind `#[cfg(target_os = "macos")]` next to the existing `command_target_macos` test scaffolding. The pure tag → command logic above is the primary coverage; these end-to-end tests only confirm the Obj-C bridge wiring works against a real `NSButton`. If running the harness in CI without a macOS runtime, only the pure tests run; the macOS-only tests are skipped via `cfg`.
 
 ### Smoke test (extend `scripts/`)
 
