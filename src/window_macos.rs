@@ -120,6 +120,7 @@ pub fn show_pet_context_menu(
     window: &Window,
     proxy: winit::event_loop::EventLoopProxy<crate::app::AppCommand>,
     pet_visible: bool,
+    focus_mode: bool,
     local_position: Option<crate::physics::Vec2>,
 ) {
     #[cfg(target_os = "macos")]
@@ -158,7 +159,7 @@ pub fn show_pet_context_menu(
         let focus_mode = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 NSMenuItem::alloc(mtm),
-                ns_string!("Enable Focus Mode"),
+                context_focus_mode_ns_title(focus_mode),
                 Some(crate::command_target_macos::CommandTarget::command_selector()),
                 ns_string!(""),
             )
@@ -224,6 +225,36 @@ pub fn show_pet_context_menu(
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (window, proxy, pet_visible, local_position);
+        let _ = (window, proxy, pet_visible, focus_mode, local_position);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn context_focus_mode_ns_title(focus_mode: bool) -> &'static objc2_foundation::NSString {
+    use objc2_foundation::ns_string;
+
+    if focus_mode {
+        ns_string!("Disable Focus Mode")
+    } else {
+        ns_string!("Enable Focus Mode")
+    }
+}
+
+pub fn context_focus_mode_title(focus_mode: bool) -> &'static str {
+    if focus_mode {
+        "Disable Focus Mode"
+    } else {
+        "Enable Focus Mode"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_focus_mode_title_tracks_current_focus_mode() {
+        assert_eq!(context_focus_mode_title(false), "Enable Focus Mode");
+        assert_eq!(context_focus_mode_title(true), "Disable Focus Mode");
     }
 }

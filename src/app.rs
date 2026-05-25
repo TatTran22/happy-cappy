@@ -548,6 +548,7 @@ impl DesktopPetApp {
                 window,
                 self.event_proxy.clone(),
                 self.pet_visible,
+                self.settings.focus_mode,
                 local_position,
             );
         }
@@ -559,6 +560,7 @@ impl DesktopPetApp {
                     window,
                     event_proxy.clone(),
                     self.pet_visible,
+                    self.settings.focus_mode,
                     local_position,
                 );
             }
