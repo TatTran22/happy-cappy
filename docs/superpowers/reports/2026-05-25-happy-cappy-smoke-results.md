@@ -6,7 +6,7 @@ Bundle: `dist/Happy Cappy.app`
 ## Automated Checks
 
 - `./scripts/verify.sh`: PASS
-- `./scripts/smoke_app.sh` static checks and process launch check: PASS
+- `./scripts/smoke_app.sh` static checks and fresh process launch check: PASS
 
 ## Manual Checks
 
@@ -27,7 +27,7 @@ Bundle: `dist/Happy Cappy.app`
 
 ## Notes
 
-- `./scripts/smoke_app.sh` launched the app successfully after static bundle checks and confirmed the `happy-cappy` process stayed running.
+- `./scripts/smoke_app.sh` closed any pre-existing `happy-cappy` process, launched the app successfully after static bundle checks, and confirmed a fresh `happy-cappy` process stayed running.
 - Interactive mode intentionally uses full-frame window event capture for reliable controls.
 - Focus Mode is the supported click-through mode.
 - Manual UI checks require direct user observation and were not marked pass automatically.

@@ -55,8 +55,28 @@ if command -v codesign >/dev/null 2>&1; then
   codesign --verify --deep --strict "$APP_DIR"
 fi
 
+if pgrep -x "happy-cappy" >/dev/null 2>&1; then
+  pkill -x "happy-cappy" || true
+  for _ in {1..20}; do
+    if ! pgrep -x "happy-cappy" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.1
+  done
+  if pgrep -x "happy-cappy" >/dev/null 2>&1; then
+    echo "Existing Happy Cappy process did not exit before smoke launch." >&2
+    exit 1
+  fi
+fi
+
 open "$APP_DIR"
-sleep 1
+
+for _ in {1..30}; do
+  if pgrep -x "happy-cappy" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.1
+done
 
 if ! pgrep -x "happy-cappy" >/dev/null 2>&1; then
   echo "Happy Cappy did not appear to stay running after launch." >&2
