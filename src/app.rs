@@ -340,6 +340,12 @@ impl DesktopPetApp {
         self.pet.set_hidden(!visible);
         if let Some(window) = &self.window {
             window.set_visible(visible);
+            if visible {
+                window.request_redraw();
+            }
+        }
+        if visible {
+            self.next_tick_at = Instant::now();
         }
         self.sync_settings_window();
         self.save_settings();
@@ -795,6 +801,21 @@ mod tests {
         app.pet.set_hovered(true);
 
         assert_eq!(app.next_tick_interval(), TARGET_FRAME_TIME);
+    }
+
+    #[test]
+    fn showing_hidden_pet_reschedules_next_tick_immediately() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.settings_path = None;
+        app.pet_visible = false;
+        app.pet.set_hidden(true);
+        app.next_tick_at = Instant::now() + Duration::from_secs(5);
+
+        app.set_pet_visible(true);
+
+        assert!(app.next_tick_at <= Instant::now());
+        assert!(app.pet_visible);
+        assert_eq!(app.pet.behavior_mode(), crate::pet::BehaviorMode::Default);
     }
 
     #[test]
