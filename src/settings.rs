@@ -37,6 +37,8 @@ pub struct AppSettings {
     #[serde(default = "default_pet_visible")]
     pub pet_visible: bool,
     #[serde(default)]
+    pub focus_mode: bool,
+    #[serde(default)]
     pub last_position: Option<StoredPosition>,
 }
 
@@ -88,6 +90,7 @@ impl Default for AppSettings {
             hover_intensity: 1.0,
             monitor_behavior: MonitorBehavior::CurrentDisplay,
             pet_visible: true,
+            focus_mode: false,
             last_position: None,
         }
     }
@@ -235,6 +238,13 @@ mod tests {
     }
 
     #[test]
+    fn defaults_keep_focus_mode_off() {
+        let settings = AppSettings::default();
+
+        assert!(!settings.focus_mode);
+    }
+
+    #[test]
     fn sanitize_clamps_numeric_values() {
         let mut settings = AppSettings {
             scale: 99.0,
@@ -303,6 +313,7 @@ mod tests {
             hover_intensity: 2.5,
             monitor_behavior: MonitorBehavior::PrimaryDisplay,
             pet_visible: false,
+            focus_mode: true,
             last_position: Some(StoredPosition {
                 x: 22.0,
                 y: 33.0,
@@ -349,6 +360,22 @@ mod tests {
                 display_name: None,
             })
         );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn partial_settings_load_defaults_focus_mode_to_off() {
+        let root =
+            std::env::temp_dir().join(format!("happy-cappy-partial-focus-{}", fastrand::u64(..)));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("settings.json");
+        fs::write(&path, br#"{"personality":"calm","scale":3.0}"#).unwrap();
+
+        let loaded =
+            AppSettings::load_or_default_from(&path, bounds(), Vec2 { x: 128.0, y: 128.0 });
+
+        assert!(!loaded.focus_mode);
 
         let _ = fs::remove_dir_all(root);
     }

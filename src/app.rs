@@ -22,7 +22,7 @@ use crate::{
     settings::{default_settings_path, AppSettings, SettingsError},
     settings_window_macos::SettingsWindowController,
     sprite::{SpriteRow, SpriteSheet},
-    window_macos::apply_desktop_pet_window_behavior,
+    window_macos::{apply_desktop_pet_window_behavior, set_pet_window_mouse_passthrough},
 };
 
 pub const FRAME_SIZE: u32 = 64;
@@ -48,6 +48,10 @@ pub enum AppCommand {
     SetMovementSpeed(f32),
     SetHoverIntensity(f32),
     SetMonitorBehavior(crate::settings::MonitorBehavior),
+    SetFocusMode(bool),
+    ToggleFocusMode,
+    Nap,
+    CheerUp,
     Quit,
 }
 
@@ -273,6 +277,7 @@ impl DesktopPetApp {
     }
 
     fn apply_settings(&mut self, mut settings: AppSettings) {
+        let focus_mode_turned_on = !self.settings.focus_mode && settings.focus_mode;
         settings.scale = settings
             .scale
             .clamp(AppSettings::MIN_SCALE, AppSettings::MAX_SCALE);
@@ -311,6 +316,9 @@ impl DesktopPetApp {
         }
 
         self.settings = settings;
+        if focus_mode_turned_on {
+            self.clear_interaction_state();
+        }
         if let Some(window) = &self.window {
             let size = LogicalSize::new(self.physics.size.x as f64, self.physics.size.y as f64);
             let _ = window.request_inner_size(size);
@@ -318,6 +326,7 @@ impl DesktopPetApp {
         self.sync_settings_window();
         self.sync_menu_bar();
         self.move_window_to_pet();
+        self.sync_window_passthrough();
     }
 
     #[allow(dead_code)]
@@ -384,6 +393,29 @@ impl DesktopPetApp {
         self.save_settings();
     }
 
+    fn set_focus_mode(&mut self, focus_mode: bool) {
+        let mut settings = self.settings.clone();
+        settings.focus_mode = focus_mode;
+        self.apply_settings(settings);
+        self.save_settings();
+    }
+
+    fn clear_interaction_state(&mut self) {
+        self.interaction = InteractionState::default();
+        self.pet.set_hovered(false);
+        self.pet.set_dragging(false);
+        self.last_cursor_local_position = None;
+        self.last_cursor_screen_position = None;
+    }
+
+    fn sync_window_passthrough(&self) {
+        if let Some(window) = &self.window {
+            if let Err(error) = set_pet_window_mouse_passthrough(window, self.settings.focus_mode) {
+                warn!("failed to sync pet window mouse passthrough: {error}");
+            }
+        }
+    }
+
     fn handle_non_quit_command(&mut self, command: AppCommand) -> bool {
         match command {
             AppCommand::OpenSettings => self.open_settings_window(),
@@ -421,6 +453,9 @@ impl DesktopPetApp {
             AppCommand::SetMonitorBehavior(monitor_behavior) => {
                 self.set_monitor_behavior(monitor_behavior, None);
             }
+            AppCommand::SetFocusMode(focus_mode) => self.set_focus_mode(focus_mode),
+            AppCommand::ToggleFocusMode => self.set_focus_mode(!self.settings.focus_mode),
+            AppCommand::Nap | AppCommand::CheerUp => {}
             AppCommand::Quit => return false,
         }
         true
@@ -1022,6 +1057,30 @@ mod tests {
             app.settings_for_test().monitor_behavior,
             crate::settings::MonitorBehavior::PrimaryDisplay
         );
+    }
+
+    #[test]
+    fn non_quit_command_toggles_focus_mode() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.settings_path = None;
+
+        assert!(app.handle_non_quit_command_for_test(AppCommand::ToggleFocusMode));
+        assert!(app.settings_for_test().focus_mode);
+
+        assert!(app.handle_non_quit_command_for_test(AppCommand::ToggleFocusMode));
+        assert!(!app.settings_for_test().focus_mode);
+    }
+
+    #[test]
+    fn set_focus_mode_command_sets_exact_value() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.settings_path = None;
+
+        assert!(app.handle_non_quit_command_for_test(AppCommand::SetFocusMode(true)));
+        assert!(app.settings_for_test().focus_mode);
+
+        assert!(app.handle_non_quit_command_for_test(AppCommand::SetFocusMode(false)));
+        assert!(!app.settings_for_test().focus_mode);
     }
 
     #[test]

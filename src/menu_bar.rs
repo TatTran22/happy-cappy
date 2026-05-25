@@ -6,6 +6,9 @@ pub const MENU_TAG_SETTINGS: isize = 1001;
 pub const MENU_TAG_SHOW_HIDE: isize = 1002;
 pub const MENU_TAG_RESET: isize = 1003;
 pub const MENU_TAG_QUIT: isize = 1004;
+pub const MENU_TAG_FOCUS_MODE: isize = 1005;
+pub const MENU_TAG_NAP: isize = 1006;
+pub const MENU_TAG_CHEER_UP: isize = 1007;
 pub const MENU_TAG_PERSONALITY: isize = 1101;
 pub const MENU_TAG_SCALE: isize = 1102;
 pub const MENU_TAG_MOVEMENT_SPEED: isize = 1103;
@@ -18,6 +21,9 @@ pub fn command_from_tag(tag: isize) -> Option<AppCommand> {
         MENU_TAG_SHOW_HIDE => Some(AppCommand::TogglePetVisibility),
         MENU_TAG_RESET => Some(AppCommand::ResetPosition),
         MENU_TAG_QUIT => Some(AppCommand::Quit),
+        MENU_TAG_FOCUS_MODE => Some(AppCommand::ToggleFocusMode),
+        MENU_TAG_NAP => Some(AppCommand::Nap),
+        MENU_TAG_CHEER_UP => Some(AppCommand::CheerUp),
         _ => None,
     }
 }
@@ -153,6 +159,15 @@ mod tests {
         assert_eq!(
             command_from_tag(MENU_TAG_RESET),
             Some(AppCommand::ResetPosition)
+        );
+        assert_eq!(
+            command_from_tag(MENU_TAG_FOCUS_MODE),
+            Some(AppCommand::ToggleFocusMode)
+        );
+        assert_eq!(command_from_tag(MENU_TAG_NAP), Some(AppCommand::Nap));
+        assert_eq!(
+            command_from_tag(MENU_TAG_CHEER_UP),
+            Some(AppCommand::CheerUp)
         );
         assert_eq!(command_from_tag(MENU_TAG_QUIT), Some(AppCommand::Quit));
         assert_eq!(command_from_tag(999), None);
