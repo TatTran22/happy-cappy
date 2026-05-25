@@ -150,6 +150,7 @@ impl Pet {
 
     pub fn set_movement_speed_multiplier(&mut self, multiplier: f32) {
         self.movement_speed_multiplier = multiplier.clamp(0.0, 3.0);
+        self.refresh_behavior_mode();
     }
 
     pub fn set_hover_intensity(&mut self, intensity: f32) {
@@ -188,12 +189,16 @@ impl Pet {
             };
         }
 
-        self.state_elapsed += dt;
         self.frame_elapsed += dt;
-        self.expression_elapsed += dt;
+        if !self.dragging {
+            self.state_elapsed += dt;
+            self.expression_elapsed += dt;
+        }
 
         self.advance_animation();
-        self.advance_state(dt);
+        if !self.dragging {
+            self.advance_state(dt);
+        }
 
         if !self.hovered && !self.dragging && self.expression_elapsed >= self.expression_interval()
         {
@@ -228,7 +233,7 @@ impl Pet {
                 }
             }
             PetState::Walk => {
-                self.walk_distance_remaining -= WALK_SPEED * dt.as_secs_f32();
+                self.walk_distance_remaining -= self.effective_walk_speed_abs() * dt.as_secs_f32();
                 if self.walk_distance_remaining <= 0.0 {
                     self.completed_walk_cycles += 1;
                     self.enter_idle();
@@ -282,18 +287,26 @@ impl Pet {
     }
 
     fn speed_x(&self) -> f32 {
-        if self.hidden || self.dragging || self.movement_speed_multiplier <= 0.0 {
+        let speed = self.effective_walk_speed_abs();
+        if self.hidden || self.dragging || speed <= 0.0 {
             return 0.0;
         }
         if self.state != PetState::Walk {
             return 0.0;
         }
 
-        let base = match self.direction {
-            Direction::Left => -WALK_SPEED,
-            Direction::Right => WALK_SPEED,
-        };
-        base * self.movement_speed_multiplier
+        match self.direction {
+            Direction::Left => -speed,
+            Direction::Right => speed,
+        }
+    }
+
+    fn effective_walk_speed_abs(&self) -> f32 {
+        if self.movement_speed_multiplier <= 0.0 {
+            return 0.0;
+        }
+
+        WALK_SPEED * self.movement_speed_multiplier
     }
 
     fn refresh_behavior_mode(&mut self) {
@@ -413,6 +426,30 @@ mod tests {
     }
 
     #[test]
+    fn dragging_pauses_autonomous_state_progression() {
+        let mut pet = Pet::new();
+        pet.set_dragging(true);
+
+        let tick = pet.tick(Duration::from_secs(10));
+
+        assert_eq!(pet.state(), PetState::Idle);
+        assert_eq!(pet.behavior_mode(), BehaviorMode::Dragging);
+        assert_eq!(tick.speed_x, 0.0);
+    }
+
+    #[test]
+    fn dragging_pauses_walk_distance_consumption() {
+        let mut pet = Pet::new();
+        pet.force_state_for_test(PetState::Walk);
+        pet.set_dragging(true);
+
+        pet.tick(Duration::from_secs_f32(WALK_DISTANCE / WALK_SPEED));
+
+        assert_eq!(pet.state(), PetState::Walk);
+        assert_eq!(pet.behavior_mode(), BehaviorMode::Dragging);
+    }
+
+    #[test]
     fn expression_loop_advances_without_requiring_walk() {
         let mut pet = Pet::new();
         let first = pet.current_animation_group();
@@ -432,6 +469,29 @@ mod tests {
         let tick = pet.tick(Duration::from_millis(16));
 
         assert_eq!(tick.speed_x, 0.0);
+    }
+
+    #[test]
+    fn movement_speed_multiplier_controls_walk_completion_distance() {
+        let mut pet = Pet::new();
+        pet.force_state_for_test(PetState::Walk);
+        pet.set_movement_speed_multiplier(2.0);
+
+        pet.tick(Duration::from_secs_f32(WALK_DISTANCE / (WALK_SPEED * 2.0)));
+
+        assert_eq!(pet.state(), PetState::Idle);
+    }
+
+    #[test]
+    fn movement_speed_update_refreshes_behavior_immediately() {
+        let mut pet = Pet::new();
+        pet.force_state_for_test(PetState::Walk);
+        assert_eq!(pet.behavior_mode(), BehaviorMode::Walking);
+
+        pet.set_movement_speed_multiplier(0.0);
+
+        assert_eq!(pet.behavior_mode(), BehaviorMode::Default);
+        assert_eq!(pet.current_animation_group(), AnimationGroup::Idle);
     }
 
     #[test]
