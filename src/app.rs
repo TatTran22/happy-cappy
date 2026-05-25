@@ -223,8 +223,9 @@ impl DesktopPetApp {
             return;
         };
 
-        let row = SpriteRow::from(self.pet.current_animation_group());
-        let flip_x = self.pet.current_animation_group() == crate::pet::AnimationGroup::WalkRight
+        let group = self.pet.current_animation_group();
+        let row = SpriteRow::from(group);
+        let flip_x = group == crate::pet::AnimationGroup::WalkRight
             && self.pet.direction() == Direction::Left;
         let rect = sprite_sheet.frame_rect(row, self.pet.frame_index());
 

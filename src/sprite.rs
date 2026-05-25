@@ -178,13 +178,6 @@ mod tests {
     }
 
     #[test]
-    fn accepts_expected_rows_and_four_columns() {
-        let sheet = SpriteSheet::from_image(sheet(256, 640), 64).unwrap();
-        assert_eq!(sheet.frame_count(), 4);
-        assert_eq!(sheet.row_count(), 10);
-    }
-
-    #[test]
     fn accepts_ten_rows_and_four_columns_for_happy_cappy() {
         let sheet = SpriteSheet::from_image(sheet(256, 640), 64).unwrap();
         assert_eq!(sheet.frame_count(), 4);
@@ -267,7 +260,21 @@ mod tests {
 
     #[test]
     fn maps_animation_group_to_sprite_row() {
-        assert_eq!(SpriteRow::from(AnimationGroup::Idle), SpriteRow::Idle);
-        assert_eq!(SpriteRow::from(AnimationGroup::Drag), SpriteRow::Drag);
+        let cases = [
+            (AnimationGroup::Idle, SpriteRow::Idle),
+            (AnimationGroup::Blink, SpriteRow::Blink),
+            (AnimationGroup::Happy, SpriteRow::Happy),
+            (AnimationGroup::Curious, SpriteRow::Curious),
+            (AnimationGroup::Sleepy, SpriteRow::Sleepy),
+            (AnimationGroup::HoverCalm, SpriteRow::HoverCalm),
+            (AnimationGroup::HoverCheerful, SpriteRow::HoverCheerful),
+            (AnimationGroup::HoverLively, SpriteRow::HoverLively),
+            (AnimationGroup::WalkRight, SpriteRow::WalkRight),
+            (AnimationGroup::Drag, SpriteRow::Drag),
+        ];
+
+        for (group, row) in cases {
+            assert_eq!(SpriteRow::from(group), row);
+        }
     }
 }
