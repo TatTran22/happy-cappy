@@ -19,14 +19,14 @@ cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --release
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
-cp "$ROOT_DIR/target/release/desktop-pet" "$MACOS_DIR/desktop-pet"
+cp "$ROOT_DIR/target/release/happy-cappy" "$MACOS_DIR/happy-cappy"
 cp "$ROOT_DIR/packaging/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "$SPRITE_PATH" "$RESOURCES_DIR/happy_cappy_spritesheet.png"
 
-chmod +x "$MACOS_DIR/desktop-pet"
+chmod +x "$MACOS_DIR/happy-cappy"
 
 if command -v codesign >/dev/null 2>&1; then
-  codesign --force --sign - "$MACOS_DIR/desktop-pet"
+  codesign --force --sign - "$MACOS_DIR/happy-cappy"
   codesign --force --sign - "$APP_DIR"
 fi
 

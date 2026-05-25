@@ -10,7 +10,7 @@ cargo clippy --manifest-path "$ROOT_DIR/Cargo.toml" --all-targets -- -D warnings
 cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --release
 "$ROOT_DIR/scripts/build_app.sh"
 
-test -x "$APP_DIR/Contents/MacOS/desktop-pet"
+test -x "$APP_DIR/Contents/MacOS/happy-cappy"
 test -f "$APP_DIR/Contents/Info.plist"
 test -f "$APP_DIR/Contents/Resources/happy_cappy_spritesheet.png"
 

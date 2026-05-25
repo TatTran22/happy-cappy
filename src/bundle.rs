@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 pub const APP_NAME: &str = "Happy Cappy";
 pub const BUNDLE_DIR_NAME: &str = "Happy Cappy.app";
-pub const EXECUTABLE_NAME: &str = "desktop-pet";
+pub const EXECUTABLE_NAME: &str = "happy-cappy";
 pub const SPRITE_FILE_NAME: &str = "happy_cappy_spritesheet.png";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,7 +50,7 @@ mod tests {
 
     #[test]
     fn bundled_binary_resolves_to_contents_resources() {
-        let executable = Path::new("/Applications/Happy Cappy.app/Contents/MacOS/desktop-pet");
+        let executable = Path::new("/Applications/Happy Cappy.app/Contents/MacOS/happy-cappy");
         let paths = resource_paths_from_executable(executable);
         assert_eq!(
             paths.sprite_sheet,
@@ -62,7 +62,7 @@ mod tests {
 
     #[test]
     fn development_binary_resolves_to_assets_directory() {
-        let executable = Path::new("/repo/target/debug/desktop-pet");
+        let executable = Path::new("/repo/target/debug/happy-cappy");
         let paths = resource_paths_from_executable(executable);
         assert_eq!(
             paths.sprite_sheet,
@@ -72,7 +72,7 @@ mod tests {
 
     #[test]
     fn app_named_parent_outside_bundle_resolves_to_assets_directory() {
-        let executable = Path::new("/tmp/Foo.app/build/target/debug/desktop-pet");
+        let executable = Path::new("/tmp/Foo.app/build/target/debug/happy-cappy");
         let paths = resource_paths_from_executable(executable);
         assert_eq!(
             paths.sprite_sheet,

@@ -412,23 +412,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
-name = "desktop-pet"
-version = "0.1.0"
-dependencies = [
- "env_logger",
- "fastrand",
- "image",
- "log",
- "objc2 0.6.4",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "pixels",
- "serde",
- "serde_json",
- "winit",
-]
-
-[[package]]
 name = "dispatch"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -705,6 +688,23 @@ dependencies = [
  "crunchy",
  "num-traits",
  "zerocopy",
+]
+
+[[package]]
+name = "happy-cappy"
+version = "0.1.0"
+dependencies = [
+ "env_logger",
+ "fastrand",
+ "image",
+ "log",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "pixels",
+ "serde",
+ "serde_json",
+ "winit",
 ]
 
 [[package]]

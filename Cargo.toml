@@ -1,8 +1,8 @@
 [package]
-name = "desktop-pet"
+name = "happy-cappy"
 version = "0.1.0"
 edition = "2021"
-description = "A small native macOS desktop pet."
+description = "Happy Cappy, a native macOS capybara desktop companion."
 license = "UNLICENSED"
 
 [dependencies]

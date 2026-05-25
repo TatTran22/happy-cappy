@@ -1,4 +1,4 @@
-use desktop_pet::app::{AppCommand, DesktopPetApp};
+use happy_cappy::app::{AppCommand, DesktopPetApp};
 use winit::event_loop::{ControlFlow, EventLoop};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

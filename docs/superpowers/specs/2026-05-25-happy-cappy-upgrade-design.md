@@ -200,7 +200,7 @@ Rename visible app identity:
 - Window title: `Happy Cappy`
 - Bundle output path: `dist/Happy Cappy.app`
 
-The executable remains `desktop-pet` for this upgrade to avoid unrelated binary-name churn. Build scripts and bundle metadata present the app as Happy Cappy.
+The executable is `happy-cappy`, matching the public project and bundle identity.
 
 ## Error Handling
 
