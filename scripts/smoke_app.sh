@@ -8,7 +8,7 @@ INFO_PLIST="$APP_DIR/Contents/Info.plist"
 EXECUTABLE="$APP_DIR/Contents/MacOS/happy-cappy"
 SPRITE="$APP_DIR/Contents/Resources/happy_cappy_spritesheet.png"
 PLIST_BUDDY="/usr/libexec/PlistBuddy"
-RECORD_RESULTS_PATH="$ROOT_DIR/docs/superpowers/plans/2026-05-25-happy-cappy-smoke.md"
+RECORD_RESULTS_PATH="$ROOT_DIR/docs/superpowers/reports/2026-05-25-happy-cappy-smoke-results.md"
 
 "$ROOT_DIR/scripts/build_app.sh"
 
@@ -56,6 +56,12 @@ if command -v codesign >/dev/null 2>&1; then
 fi
 
 open "$APP_DIR"
+sleep 1
+
+if ! pgrep -x "happy-cappy" >/dev/null 2>&1; then
+  echo "Happy Cappy did not appear to stay running after launch." >&2
+  exit 1
+fi
 
 cat <<CHECKLIST
 Manual smoke checklist:
