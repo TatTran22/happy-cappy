@@ -2,11 +2,20 @@ use std::{error::Error, fmt, path::Path};
 
 use image::RgbaImage;
 
+use crate::pet::AnimationGroup;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpriteRow {
     Idle,
+    Blink,
+    Happy,
+    Curious,
+    Sleepy,
+    HoverCalm,
+    HoverCheerful,
+    HoverLively,
     WalkRight,
-    Sleep,
+    Drag,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,7 +85,7 @@ pub struct SpriteSheet {
 }
 
 const EXPECTED_COLUMNS: u32 = 4;
-const EXPECTED_ROWS: u32 = 3;
+const EXPECTED_ROWS: u32 = 10;
 
 impl SpriteSheet {
     pub fn load(path: impl AsRef<Path>, frame_size: u32) -> Result<Self, SpriteError> {
@@ -122,8 +131,15 @@ impl SpriteSheet {
     pub fn frame_rect(&self, row: SpriteRow, frame_index: usize) -> FrameRect {
         let row_index = match row {
             SpriteRow::Idle => 0,
-            SpriteRow::WalkRight => 1,
-            SpriteRow::Sleep => 2,
+            SpriteRow::Blink => 1,
+            SpriteRow::Happy => 2,
+            SpriteRow::Curious => 3,
+            SpriteRow::Sleepy => 4,
+            SpriteRow::HoverCalm => 5,
+            SpriteRow::HoverCheerful => 6,
+            SpriteRow::HoverLively => 7,
+            SpriteRow::WalkRight => 8,
+            SpriteRow::Drag => 9,
         };
         let column = (frame_index % EXPECTED_COLUMNS as usize) as u32;
 
@@ -132,6 +148,23 @@ impl SpriteSheet {
             y: row_index * self.frame_size,
             width: self.frame_size,
             height: self.frame_size,
+        }
+    }
+}
+
+impl From<AnimationGroup> for SpriteRow {
+    fn from(value: AnimationGroup) -> Self {
+        match value {
+            AnimationGroup::Idle => Self::Idle,
+            AnimationGroup::Blink => Self::Blink,
+            AnimationGroup::Happy => Self::Happy,
+            AnimationGroup::Curious => Self::Curious,
+            AnimationGroup::Sleepy => Self::Sleepy,
+            AnimationGroup::HoverCalm => Self::HoverCalm,
+            AnimationGroup::HoverCheerful => Self::HoverCheerful,
+            AnimationGroup::HoverLively => Self::HoverLively,
+            AnimationGroup::WalkRight => Self::WalkRight,
+            AnimationGroup::Drag => Self::Drag,
         }
     }
 }
@@ -145,15 +178,22 @@ mod tests {
     }
 
     #[test]
-    fn accepts_three_rows_and_four_columns() {
-        let sheet = SpriteSheet::from_image(sheet(256, 192), 64).unwrap();
+    fn accepts_expected_rows_and_four_columns() {
+        let sheet = SpriteSheet::from_image(sheet(256, 640), 64).unwrap();
         assert_eq!(sheet.frame_count(), 4);
-        assert_eq!(sheet.row_count(), 3);
+        assert_eq!(sheet.row_count(), 10);
+    }
+
+    #[test]
+    fn accepts_ten_rows_and_four_columns_for_happy_cappy() {
+        let sheet = SpriteSheet::from_image(sheet(256, 640), 64).unwrap();
+        assert_eq!(sheet.frame_count(), 4);
+        assert_eq!(sheet.row_count(), 10);
     }
 
     #[test]
     fn rejects_dimensions_that_do_not_match_grid() {
-        let err = SpriteSheet::from_image(sheet(250, 192), 64).unwrap_err();
+        let err = SpriteSheet::from_image(sheet(250, 640), 64).unwrap_err();
         assert!(matches!(err, SpriteError::InvalidDimensions { .. }));
     }
 
@@ -171,23 +211,38 @@ mod tests {
 
     #[test]
     fn invalid_dimensions_display_includes_actual_expected_and_frame_size() {
-        let err = SpriteSheet::from_image(sheet(250, 192), 64).unwrap_err();
+        let err = SpriteSheet::from_image(sheet(250, 640), 64).unwrap_err();
         let message = err.to_string();
 
-        assert!(message.contains("actual 250x192"));
-        assert!(message.contains("expected 256x192"));
+        assert!(message.contains("actual 250x640"));
+        assert!(message.contains("expected 256x640"));
         assert!(message.contains("frame size 64"));
     }
 
     #[test]
     fn returns_frame_rect_for_state_row_and_index() {
-        let sheet = SpriteSheet::from_image(sheet(256, 192), 64).unwrap();
+        let sheet = SpriteSheet::from_image(sheet(256, 640), 64).unwrap();
         let rect = sheet.frame_rect(SpriteRow::WalkRight, 2);
         assert_eq!(
             rect,
             FrameRect {
                 x: 128,
-                y: 64,
+                y: 8 * 64,
+                width: 64,
+                height: 64
+            }
+        );
+    }
+
+    #[test]
+    fn returns_frame_rect_for_hover_lively_group() {
+        let sheet = SpriteSheet::from_image(sheet(256, 640), 64).unwrap();
+        let rect = sheet.frame_rect(SpriteRow::HoverLively, 3);
+        assert_eq!(
+            rect,
+            FrameRect {
+                x: 192,
+                y: 7 * 64,
                 width: 64,
                 height: 64
             }
@@ -196,7 +251,7 @@ mod tests {
 
     #[test]
     fn frame_rect_wraps_frame_index_at_four_columns() {
-        let sheet = SpriteSheet::from_image(sheet(256, 192), 64).unwrap();
+        let sheet = SpriteSheet::from_image(sheet(256, 640), 64).unwrap();
         let rect = sheet.frame_rect(SpriteRow::Idle, 5);
 
         assert_eq!(
@@ -208,5 +263,11 @@ mod tests {
                 height: 64
             }
         );
+    }
+
+    #[test]
+    fn maps_animation_group_to_sprite_row() {
+        assert_eq!(SpriteRow::from(AnimationGroup::Idle), SpriteRow::Idle);
+        assert_eq!(SpriteRow::from(AnimationGroup::Drag), SpriteRow::Drag);
     }
 }

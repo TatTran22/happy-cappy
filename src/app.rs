@@ -223,12 +223,9 @@ impl DesktopPetApp {
             return;
         };
 
-        let row = match self.pet.state() {
-            PetState::Idle => SpriteRow::Idle,
-            PetState::Walk => SpriteRow::WalkRight,
-            PetState::Sleep => SpriteRow::Sleep,
-        };
-        let flip_x = self.pet.state() == PetState::Walk && self.pet.direction() == Direction::Left;
+        let row = SpriteRow::from(self.pet.current_animation_group());
+        let flip_x = self.pet.current_animation_group() == crate::pet::AnimationGroup::WalkRight
+            && self.pet.direction() == Direction::Left;
         let rect = sprite_sheet.frame_rect(row, self.pet.frame_index());
 
         if let Err(error) = renderer.draw(sprite_sheet.image(), rect, flip_x) {
