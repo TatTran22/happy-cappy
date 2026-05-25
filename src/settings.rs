@@ -36,7 +36,7 @@ pub struct AppSettings {
     pub monitor_behavior: MonitorBehavior,
     #[serde(default = "default_pet_visible")]
     pub pet_visible: bool,
-    #[serde(default)]
+    #[serde(default = "default_focus_mode")]
     pub focus_mode: bool,
     #[serde(default)]
     pub last_position: Option<StoredPosition>,
@@ -200,6 +200,10 @@ fn default_monitor_behavior() -> MonitorBehavior {
 
 fn default_pet_visible() -> bool {
     true
+}
+
+fn default_focus_mode() -> bool {
+    false
 }
 
 pub fn default_settings_path() -> Result<PathBuf, SettingsError> {
