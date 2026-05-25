@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use image::RgbaImage;
-use pixels::{Pixels, SurfaceTexture};
+use pixels::{wgpu, Pixels, PixelsBuilder, SurfaceTexture};
 use winit::window::Window;
 
 use crate::sprite::FrameRect;
@@ -28,7 +28,11 @@ impl PetRenderer {
         buffer_height: u32,
     ) -> Result<Self, pixels::Error> {
         let surface_texture = SurfaceTexture::new(surface_width, surface_height, window);
-        let pixels = Pixels::new(buffer_width, buffer_height, surface_texture)?;
+        let pixels = PixelsBuilder::new(buffer_width, buffer_height, surface_texture)
+            .alpha_mode(wgpu::CompositeAlphaMode::PostMultiplied)
+            .blend_state(wgpu::BlendState::REPLACE)
+            .clear_color(wgpu::Color::TRANSPARENT)
+            .build()?;
 
         Ok(Self {
             pixels,

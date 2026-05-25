@@ -79,6 +79,13 @@ impl Pet {
         self.frame_index
     }
 
+    pub fn turn_around(&mut self) {
+        self.direction = match self.direction {
+            Direction::Left => Direction::Right,
+            Direction::Right => Direction::Left,
+        };
+    }
+
     pub fn tick(&mut self, dt: Duration) -> PetTick {
         self.state_elapsed += dt;
         self.frame_elapsed += dt;
@@ -231,6 +238,17 @@ mod tests {
         left_pet.force_state_for_test(PetState::Walk);
         assert_eq!(left_pet.direction(), Direction::Left);
         assert_eq!(left_pet.tick(Duration::ZERO).speed_x, -WALK_SPEED);
+    }
+
+    #[test]
+    fn turn_around_reverses_walk_speed_direction() {
+        let mut pet = Pet::new_with_seed(0);
+        pet.force_state_for_test(PetState::Walk);
+
+        pet.turn_around();
+
+        assert_eq!(pet.direction(), Direction::Left);
+        assert_eq!(pet.tick(Duration::ZERO).speed_x, -WALK_SPEED);
     }
 
     #[test]

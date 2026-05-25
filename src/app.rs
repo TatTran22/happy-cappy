@@ -29,7 +29,7 @@ pub const WINDOW_SIZE: u32 = FRAME_SIZE * WINDOW_SCALE;
 const TARGET_FRAME_TIME: Duration = Duration::from_millis(16);
 const IDLE_FRAME_TIME: Duration = Duration::from_millis(200);
 const SLEEP_FRAME_TIME: Duration = Duration::from_millis(500);
-const MAX_TICK_DELTA: Duration = Duration::from_millis(100);
+const MAX_TICK_DELTA: Duration = Duration::from_secs(1);
 const FALLBACK_BOUNDS_WIDTH: f32 = 800.0;
 const FALLBACK_BOUNDS_HEIGHT: f32 = 600.0;
 
@@ -182,7 +182,10 @@ impl DesktopPetApp {
 
         let tick = self.pet.tick(dt);
         self.physics.velocity.x = tick.speed_x;
-        self.physics.update(dt.as_secs_f32());
+        let physics_step = self.physics.update(dt.as_secs_f32());
+        if tick.state == PetState::Walk && physics_step.bounced_x {
+            self.pet.turn_around();
+        }
         self.move_window_to_pet();
         window.request_redraw();
     }
@@ -282,5 +285,16 @@ impl ApplicationHandler for DesktopPetApp {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tick_delta_cap_does_not_clip_scheduled_pet_intervals() {
+        assert!(MAX_TICK_DELTA >= IDLE_FRAME_TIME);
+        assert!(MAX_TICK_DELTA >= SLEEP_FRAME_TIME);
     }
 }

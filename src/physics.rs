@@ -20,8 +20,16 @@ pub struct Physics {
     pub bounds: Bounds,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PhysicsStep {
+    pub bounced_x: bool,
+    pub bounced_y: bool,
+    pub stopped_x: bool,
+    pub stopped_y: bool,
+}
+
 impl Physics {
-    pub fn update(&mut self, dt_seconds: f32) {
+    pub fn update(&mut self, dt_seconds: f32) -> PhysicsStep {
         self.position.x += self.velocity.x * dt_seconds;
         self.position.y += self.velocity.y * dt_seconds;
 
@@ -35,16 +43,24 @@ impl Physics {
 
         self.clamp_to_bounds_with(max_position);
 
+        let mut step = PhysicsStep::default();
+
         if stopped_x {
             self.velocity.x = 0.0;
+            step.stopped_x = true;
         } else if hit_x {
             self.velocity.x = -self.velocity.x;
+            step.bounced_x = true;
         }
         if stopped_y {
             self.velocity.y = 0.0;
+            step.stopped_y = true;
         } else if hit_y {
             self.velocity.y = -self.velocity.y;
+            step.bounced_y = true;
         }
+
+        step
     }
 
     pub fn clamp_to_bounds(&mut self) {
@@ -102,9 +118,11 @@ mod tests {
         let mut physics = physics();
         physics.position = Vec2 { x: 135.0, y: 20.0 };
         physics.velocity = Vec2 { x: 40.0, y: 0.0 };
-        physics.update(1.0);
+        let step = physics.update(1.0);
         assert_eq!(physics.position.x, 136.0);
         assert_eq!(physics.velocity.x, -40.0);
+        assert!(step.bounced_x);
+        assert!(!step.bounced_y);
     }
 
     #[test]
@@ -112,9 +130,11 @@ mod tests {
         let mut physics = physics();
         physics.position = Vec2 { x: 10.0, y: 135.0 };
         physics.velocity = Vec2 { x: 0.0, y: 40.0 };
-        physics.update(1.0);
+        let step = physics.update(1.0);
         assert_eq!(physics.position.y, 136.0);
         assert_eq!(physics.velocity.y, -40.0);
+        assert!(!step.bounced_x);
+        assert!(step.bounced_y);
     }
 
     #[test]
@@ -126,8 +146,17 @@ mod tests {
             max_x: 50.0,
             max_y: 50.0,
         };
-        physics.update(1.0);
+        let step = physics.update(1.0);
         assert_eq!(physics.position, Vec2 { x: 0.0, y: 0.0 });
         assert_eq!(physics.velocity, Vec2 { x: 0.0, y: 0.0 });
+        assert_eq!(
+            step,
+            PhysicsStep {
+                bounced_x: false,
+                bounced_y: false,
+                stopped_x: true,
+                stopped_y: true,
+            }
+        );
     }
 }
