@@ -119,6 +119,7 @@ fn apply_platform_window_behavior(window: &Window) -> Result<(), WindowTweaksErr
 pub fn show_pet_context_menu(
     proxy: winit::event_loop::EventLoopProxy<crate::app::AppCommand>,
     pet_visible: bool,
+    local_position: Option<crate::physics::Vec2>,
 ) {
     #[cfg(target_os = "macos")]
     {
@@ -171,12 +172,17 @@ pub fn show_pet_context_menu(
         menu.addItem(&settings);
         menu.addItem(&hide);
         menu.addItem(&reset);
-        menu.popUpMenuPositioningItem_atLocation_inView(None, NSPoint::new(0.0, 0.0), None);
+        let local_position = local_position.unwrap_or(crate::physics::Vec2 { x: 0.0, y: 0.0 });
+        menu.popUpMenuPositioningItem_atLocation_inView(
+            None,
+            NSPoint::new(local_position.x as f64, local_position.y as f64),
+            None,
+        );
         let _keep_target_alive_until_menu_returns = target;
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (proxy, pet_visible);
+        let _ = (proxy, pet_visible, local_position);
     }
 }

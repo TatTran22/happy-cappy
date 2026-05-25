@@ -6,7 +6,7 @@ use std::{
 use log::{error, warn};
 use winit::{
     application::ApplicationHandler,
-    dpi::{LogicalPosition, LogicalSize},
+    dpi::{LogicalPosition, LogicalSize, PhysicalPosition},
     event::WindowEvent,
     event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy},
     window::{Window, WindowAttributes, WindowId},
@@ -63,7 +63,8 @@ pub struct DesktopPetApp {
     settings_path: Option<std::path::PathBuf>,
     pet_visible: bool,
     interaction: InteractionState,
-    last_cursor_position: Option<Vec2>,
+    last_cursor_local_position: Option<Vec2>,
+    last_cursor_screen_position: Option<Vec2>,
     #[cfg(not(test))]
     event_proxy: EventLoopProxy<AppCommand>,
     #[cfg(test)]
@@ -88,7 +89,8 @@ impl DesktopPetApp {
             settings_path: default_settings_path().ok(),
             pet_visible: true,
             interaction: InteractionState::default(),
-            last_cursor_position: None,
+            last_cursor_local_position: None,
+            last_cursor_screen_position: None,
             #[cfg(not(test))]
             event_proxy,
             #[cfg(test)]
@@ -114,7 +116,8 @@ impl DesktopPetApp {
             settings_path: default_settings_path().ok(),
             pet_visible: true,
             interaction: InteractionState::default(),
-            last_cursor_position: None,
+            last_cursor_local_position: None,
+            last_cursor_screen_position: None,
             event_proxy,
         }
     }
@@ -396,16 +399,24 @@ impl DesktopPetApp {
         warn!("settings window is not available yet");
     }
 
-    fn show_context_menu(&self) {
+    fn show_context_menu(&self, local_position: Option<Vec2>) {
         #[cfg(not(test))]
         {
-            crate::window_macos::show_pet_context_menu(self.event_proxy.clone(), self.pet_visible);
+            crate::window_macos::show_pet_context_menu(
+                self.event_proxy.clone(),
+                self.pet_visible,
+                local_position,
+            );
         }
 
         #[cfg(test)]
         {
             if let Some(event_proxy) = self.event_proxy.as_ref() {
-                crate::window_macos::show_pet_context_menu(event_proxy.clone(), self.pet_visible);
+                crate::window_macos::show_pet_context_menu(
+                    event_proxy.clone(),
+                    self.pet_visible,
+                    local_position,
+                );
             }
         }
     }
@@ -474,6 +485,19 @@ impl DesktopPetApp {
         alpha_hit_test_with_flip(sprite_sheet.image(), rect, scaled_point, flip_x)
     }
 
+    fn cursor_logical_position(&self, physical: PhysicalPosition<f64>) -> Vec2 {
+        let scale_factor = self
+            .window
+            .as_ref()
+            .map(|window| window.scale_factor())
+            .unwrap_or(1.0) as f32;
+        cursor_logical_position_for_scale(physical, scale_factor)
+    }
+
+    fn cursor_screen_position(&self, local_logical: Vec2) -> Vec2 {
+        cursor_screen_position_for_window(self.physics.position, local_logical)
+    }
+
     fn handle_interaction_events(&mut self, events: Vec<InteractionEvent>) {
         for event in events {
             match event {
@@ -496,10 +520,29 @@ impl DesktopPetApp {
                     self.persist_current_position();
                 }
                 InteractionEvent::ContextMenuRequested { .. } => {
-                    self.show_context_menu();
+                    self.show_context_menu(self.last_cursor_local_position);
                 }
             }
         }
+    }
+}
+
+fn cursor_logical_position_for_scale(physical: PhysicalPosition<f64>, scale_factor: f32) -> Vec2 {
+    let scale_factor = if scale_factor.is_finite() && scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    };
+    Vec2 {
+        x: physical.x as f32 / scale_factor,
+        y: physical.y as f32 / scale_factor,
+    }
+}
+
+fn cursor_screen_position_for_window(window_position: Vec2, local_logical: Vec2) -> Vec2 {
+    Vec2 {
+        x: window_position.x + local_logical.x,
+        y: window_position.y + local_logical.y,
     }
 }
 
@@ -593,30 +636,42 @@ impl ApplicationHandler<AppCommand> for DesktopPetApp {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::RedrawRequested => self.draw(),
             WindowEvent::CursorMoved { position, .. } => {
-                let point = Vec2 {
-                    x: position.x as f32,
-                    y: position.y as f32,
-                };
-                self.last_cursor_position = Some(point);
-                let hit = self.current_sprite_hit_test(point);
-                let events = self.interaction.pointer_moved(point, hit);
+                let local_logical = self.cursor_logical_position(position);
+                let screen_logical = self.cursor_screen_position(local_logical);
+                self.last_cursor_local_position = Some(local_logical);
+                self.last_cursor_screen_position = Some(screen_logical);
+                let hit = self.current_sprite_hit_test(local_logical);
+                let events = self.interaction.pointer_moved(screen_logical, hit);
                 self.handle_interaction_events(events);
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                let Some(point) = self.last_cursor_position else {
+                let (Some(local_logical), Some(screen_logical)) = (
+                    self.last_cursor_local_position,
+                    self.last_cursor_screen_position,
+                ) else {
                     return;
                 };
                 let button = Self::mouse_button_kind(button);
-                let hit = self.current_sprite_hit_test(point);
+                let hit = self.current_sprite_hit_test(local_logical);
                 let events = match state {
                     winit::event::ElementState::Pressed => {
-                        self.interaction.mouse_pressed(point, button, hit)
+                        self.interaction.mouse_pressed(screen_logical, button, hit)
                     }
                     winit::event::ElementState::Released => {
-                        self.interaction.mouse_released(point, button, hit)
+                        self.interaction.mouse_released(screen_logical, button, hit)
                     }
                 };
                 self.handle_interaction_events(events);
+            }
+            WindowEvent::CursorLeft { .. } => {
+                let screen_logical = self
+                    .last_cursor_screen_position
+                    .unwrap_or_else(|| self.cursor_screen_position(Vec2 { x: 0.0, y: 0.0 }));
+                let events = self.interaction.pointer_moved(screen_logical, false);
+                self.handle_interaction_events(events);
+                self.pet.set_hovered(false);
+                self.last_cursor_local_position = None;
+                self.last_cursor_screen_position = None;
             }
             WindowEvent::Resized(size) => {
                 if let Some(renderer) = self.renderer.as_mut() {
@@ -737,6 +792,25 @@ mod tests {
         assert_eq!(
             DesktopPetApp::mouse_button_kind(winit::event::MouseButton::Middle),
             MouseButtonKind::Other
+        );
+    }
+
+    #[test]
+    fn cursor_logical_position_converts_physical_pixels_with_scale_factor() {
+        assert_eq!(
+            cursor_logical_position_for_scale(winit::dpi::PhysicalPosition::new(80.0, 120.0), 2.0),
+            Vec2 { x: 40.0, y: 60.0 }
+        );
+    }
+
+    #[test]
+    fn cursor_screen_position_offsets_local_point_by_window_position() {
+        assert_eq!(
+            cursor_screen_position_for_window(
+                Vec2 { x: 120.0, y: 90.0 },
+                Vec2 { x: 12.0, y: 34.0 }
+            ),
+            Vec2 { x: 132.0, y: 124.0 }
         );
     }
 }
