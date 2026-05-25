@@ -25,4 +25,9 @@ cp "$SPRITE_PATH" "$RESOURCES_DIR/pet_spritesheet.png"
 
 chmod +x "$MACOS_DIR/desktop-pet"
 
+if command -v codesign >/dev/null 2>&1; then
+  codesign --force --sign - "$MACOS_DIR/desktop-pet"
+  codesign --force --sign - "$APP_DIR"
+fi
+
 echo "Built $APP_DIR"

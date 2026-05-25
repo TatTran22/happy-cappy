@@ -13,3 +13,7 @@ cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --release
 test -x "$APP_DIR/Contents/MacOS/desktop-pet"
 test -f "$APP_DIR/Contents/Info.plist"
 test -f "$APP_DIR/Contents/Resources/pet_spritesheet.png"
+
+if command -v codesign >/dev/null 2>&1; then
+  codesign --verify --deep --strict "$APP_DIR"
+fi
