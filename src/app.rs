@@ -128,7 +128,7 @@ impl DesktopPetApp {
 
     fn create_window(&mut self, event_loop: &ActiveEventLoop) -> bool {
         let attributes = WindowAttributes::default()
-            .with_title("DesktopPet")
+            .with_title("Happy Cappy")
             .with_inner_size(LogicalSize::new(WINDOW_SIZE as f64, WINDOW_SIZE as f64))
             .with_resizable(false)
             .with_decorations(false)
@@ -477,14 +477,28 @@ impl DesktopPetApp {
     }
 
     fn next_tick_interval(&self) -> Duration {
-        match self.pet.state() {
-            PetState::Walk => TARGET_FRAME_TIME,
-            PetState::Idle => IDLE_FRAME_TIME,
-            PetState::Sleep => SLEEP_FRAME_TIME,
+        if !self.pet_visible {
+            return Duration::from_secs(5);
+        }
+
+        match self.pet.behavior_mode() {
+            crate::pet::BehaviorMode::Hovered
+            | crate::pet::BehaviorMode::Dragging
+            | crate::pet::BehaviorMode::Walking => TARGET_FRAME_TIME,
+            crate::pet::BehaviorMode::Hidden => Duration::from_secs(5),
+            crate::pet::BehaviorMode::Default => match self.pet.state() {
+                PetState::Walk => TARGET_FRAME_TIME,
+                PetState::Idle => IDLE_FRAME_TIME,
+                PetState::Sleep => SLEEP_FRAME_TIME,
+            },
         }
     }
 
     fn draw(&mut self) {
+        if !self.pet_visible {
+            return;
+        }
+
         let (Some(renderer), Some(sprite_sheet)) =
             (self.renderer.as_mut(), self.sprite_sheet.as_ref())
         else {
@@ -764,6 +778,23 @@ mod tests {
 
         assert!(!app.tick_due(now + Duration::from_millis(1)));
         assert!(app.tick_due(now + IDLE_FRAME_TIME));
+    }
+
+    #[test]
+    fn hidden_pet_uses_slow_tick_interval() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.pet_visible = false;
+        app.pet.set_hidden(true);
+
+        assert_eq!(app.next_tick_interval(), Duration::from_secs(5));
+    }
+
+    #[test]
+    fn hovered_pet_uses_target_frame_interval() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.pet.set_hovered(true);
+
+        assert_eq!(app.next_tick_interval(), TARGET_FRAME_TIME);
     }
 
     #[test]
