@@ -1,8 +1,12 @@
 pub mod app;
 pub mod bundle;
+pub mod command_target_macos;
+pub mod interaction;
 pub mod menu_bar;
 pub mod pet;
 pub mod physics;
 pub mod renderer;
+pub mod settings;
+pub mod settings_window_macos;
 pub mod sprite;
 pub mod window_macos;

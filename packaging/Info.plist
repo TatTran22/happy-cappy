@@ -7,11 +7,11 @@
 	<key>CFBundleExecutable</key>
 	<string>desktop-pet</string>
 	<key>CFBundleIdentifier</key>
-	<string>dev.tattran.desktop-pet</string>
+	<string>dev.tattran.happy-cappy</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>DesktopPet</string>
+	<string>Happy Cappy</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

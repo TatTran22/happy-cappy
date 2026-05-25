@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
-pub const APP_NAME: &str = "DesktopPet";
-pub const SPRITE_FILE_NAME: &str = "pet_spritesheet.png";
+pub const APP_NAME: &str = "Happy Cappy";
+pub const BUNDLE_DIR_NAME: &str = "Happy Cappy.app";
+pub const EXECUTABLE_NAME: &str = "desktop-pet";
+pub const SPRITE_FILE_NAME: &str = "happy_cappy_spritesheet.png";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourcePaths {
@@ -48,11 +50,13 @@ mod tests {
 
     #[test]
     fn bundled_binary_resolves_to_contents_resources() {
-        let executable = Path::new("/Applications/DesktopPet.app/Contents/MacOS/desktop-pet");
+        let executable = Path::new("/Applications/Happy Cappy.app/Contents/MacOS/desktop-pet");
         let paths = resource_paths_from_executable(executable);
         assert_eq!(
             paths.sprite_sheet,
-            PathBuf::from("/Applications/DesktopPet.app/Contents/Resources/pet_spritesheet.png")
+            PathBuf::from(
+                "/Applications/Happy Cappy.app/Contents/Resources/happy_cappy_spritesheet.png"
+            )
         );
     }
 
@@ -62,7 +66,7 @@ mod tests {
         let paths = resource_paths_from_executable(executable);
         assert_eq!(
             paths.sprite_sheet,
-            PathBuf::from("assets/pet_spritesheet.png")
+            PathBuf::from("assets/happy_cappy_spritesheet.png")
         );
     }
 
@@ -72,7 +76,7 @@ mod tests {
         let paths = resource_paths_from_executable(executable);
         assert_eq!(
             paths.sprite_sheet,
-            PathBuf::from("assets/pet_spritesheet.png")
+            PathBuf::from("assets/happy_cappy_spritesheet.png")
         );
     }
 }

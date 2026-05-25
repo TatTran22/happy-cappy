@@ -11,19 +11,29 @@ fastrand = "2"
 image = { version = "0.25", default-features = false, features = ["png"] }
 log = "0.4"
 pixels = "0.17.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 winit = "0.30.13"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = [
   "NSApplication",
+  "NSButton",
+  "NSControl",
   "NSMenu",
   "NSMenuItem",
+  "NSPanel",
   "NSResponder",
+  "NSSegmentedControl",
+  "NSSlider",
+  "NSStackView",
   "NSStatusBar",
   "NSStatusItem",
+  "NSTextField",
   "NSView",
   "NSWindow",
+  "NSWindowController",
   "objc2-core-foundation",
 ] }
 objc2-foundation = "0.3"

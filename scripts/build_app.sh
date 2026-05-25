@@ -2,11 +2,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_DIR="$ROOT_DIR/dist/DesktopPet.app"
+APP_DIR="$ROOT_DIR/dist/Happy Cappy.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
-SPRITE_PATH="$ROOT_DIR/assets/pet_spritesheet.png"
+SPRITE_PATH="$ROOT_DIR/assets/happy_cappy_spritesheet.png"
 
 if [[ ! -f "$SPRITE_PATH" ]]; then
   echo "Missing sprite asset: $SPRITE_PATH" >&2
@@ -21,7 +21,7 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
 cp "$ROOT_DIR/target/release/desktop-pet" "$MACOS_DIR/desktop-pet"
 cp "$ROOT_DIR/packaging/Info.plist" "$CONTENTS_DIR/Info.plist"
-cp "$SPRITE_PATH" "$RESOURCES_DIR/pet_spritesheet.png"
+cp "$SPRITE_PATH" "$RESOURCES_DIR/happy_cappy_spritesheet.png"
 
 chmod +x "$MACOS_DIR/desktop-pet"
 
