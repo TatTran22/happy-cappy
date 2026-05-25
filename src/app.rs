@@ -40,12 +40,14 @@ pub struct DesktopPetApp {
     pet: Pet,
     physics: Physics,
     last_tick: Instant,
+    next_tick_at: Instant,
     menu_bar: Option<MenuBarController>,
 }
 
 impl DesktopPetApp {
     pub fn new() -> Self {
         let seed = fastrand::u64(..);
+        let now = Instant::now();
 
         Self {
             window: None,
@@ -66,7 +68,8 @@ impl DesktopPetApp {
                     max_y: FALLBACK_BOUNDS_HEIGHT,
                 },
             },
-            last_tick: Instant::now(),
+            last_tick: now,
+            next_tick_at: now,
             menu_bar: None,
         }
     }
@@ -106,6 +109,9 @@ impl DesktopPetApp {
         ) {
             Ok(renderer) => {
                 self.renderer = Some(renderer);
+                let now = Instant::now();
+                self.last_tick = now;
+                self.next_tick_at = now;
                 window.request_redraw();
                 true
             }
@@ -170,13 +176,12 @@ impl DesktopPetApp {
         self.physics.clamp_to_bounds();
     }
 
-    fn tick(&mut self) {
+    fn tick(&mut self, now: Instant) {
         let Some(window) = self.window.as_ref().map(Arc::clone) else {
-            self.last_tick = Instant::now();
+            self.last_tick = now;
             return;
         };
 
-        let now = Instant::now();
         let dt = now.duration_since(self.last_tick).min(MAX_TICK_DELTA);
         self.last_tick = now;
 
@@ -197,6 +202,10 @@ impl DesktopPetApp {
                 f64::from(self.physics.position.y),
             ));
         }
+    }
+
+    fn tick_due(&self, now: Instant) -> bool {
+        now >= self.next_tick_at
     }
 
     fn next_tick_interval(&self) -> Duration {
@@ -250,10 +259,13 @@ impl ApplicationHandler for DesktopPetApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        self.tick();
-        event_loop.set_control_flow(ControlFlow::WaitUntil(
-            Instant::now() + self.next_tick_interval(),
-        ));
+        let now = Instant::now();
+        if self.tick_due(now) {
+            self.tick(now);
+            self.next_tick_at = now + self.next_tick_interval();
+        }
+
+        event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_tick_at));
     }
 
     fn window_event(
@@ -296,5 +308,15 @@ mod tests {
     fn tick_delta_cap_does_not_clip_scheduled_pet_intervals() {
         assert!(MAX_TICK_DELTA >= IDLE_FRAME_TIME);
         assert!(MAX_TICK_DELTA >= SLEEP_FRAME_TIME);
+    }
+
+    #[test]
+    fn redraw_wakeups_do_not_bypass_next_tick_deadline() {
+        let mut app = DesktopPetApp::new();
+        let now = Instant::now();
+        app.next_tick_at = now + IDLE_FRAME_TIME;
+
+        assert!(!app.tick_due(now + Duration::from_millis(1)));
+        assert!(app.tick_due(now + IDLE_FRAME_TIME));
     }
 }
