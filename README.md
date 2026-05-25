@@ -10,7 +10,13 @@ Happy Cappy is a native macOS desktop companion: a small capybara pet that lives
 - Right-click the pet for Settings, Hide/Show, and Reset Position controls.
 - Native macOS menu bar item (`HC`) and settings panel.
 - Hide the pet while keeping the menu bar app running.
+- Focus Mode keeps Happy Cappy visible while passing mouse input through to apps underneath.
+- Nap and Cheer Up actions from the menu bar and pet context menu.
 - Local JSON settings under `~/Library/Application Support/Happy Cappy/settings.json`.
+
+## Interaction Notes
+
+Interactive mode captures mouse input across the pet window frame so hover, drag, and right-click controls stay reliable. Transparent pixels are alpha-tested for pet actions, but macOS still routes events to the window frame. Use Focus Mode when you want Happy Cappy to stay visible without intercepting clicks.
 
 ## Requirements
 
