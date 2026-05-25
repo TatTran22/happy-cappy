@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+use crate::micro_action::{ActionOverride, MicroAction};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Personality {
@@ -12,6 +14,7 @@ pub enum Personality {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BehaviorMode {
     Default,
+    Action,
     Hovered,
     Dragging,
     Walking,
@@ -68,6 +71,7 @@ pub struct Pet {
     expression_elapsed: Duration,
     movement_speed_multiplier: f32,
     hover_intensity: f32,
+    action_override: Option<ActionOverride>,
     hovered: bool,
     dragging: bool,
     hidden: bool,
@@ -113,6 +117,7 @@ impl Pet {
             expression_elapsed: Duration::ZERO,
             movement_speed_multiplier: 1.0,
             hover_intensity: 1.0,
+            action_override: None,
             hovered: false,
             dragging: false,
             hidden: false,
@@ -172,6 +177,16 @@ impl Pet {
         self.refresh_behavior_mode();
     }
 
+    pub fn start_micro_action(&mut self, action: MicroAction) {
+        self.action_override = Some(ActionOverride::new(action));
+        self.refresh_behavior_mode();
+    }
+
+    pub fn clear_micro_action(&mut self) {
+        self.action_override = None;
+        self.refresh_behavior_mode();
+    }
+
     pub fn turn_around(&mut self) {
         self.direction = match self.direction {
             Direction::Left => Direction::Right,
@@ -180,6 +195,15 @@ impl Pet {
     }
 
     pub fn tick(&mut self, dt: Duration) -> PetTick {
+        let had_action = self.action_override.is_some();
+        if self
+            .action_override
+            .as_mut()
+            .is_some_and(|action| action.tick(dt))
+        {
+            self.clear_micro_action();
+        }
+
         if self.hidden {
             self.refresh_behavior_mode();
             return PetTick {
@@ -200,7 +224,10 @@ impl Pet {
             self.advance_state(dt);
         }
 
-        if !self.hovered && !self.dragging && self.expression_elapsed >= self.expression_interval()
+        if !had_action
+            && !self.hovered
+            && !self.dragging
+            && self.expression_elapsed >= self.expression_interval()
         {
             self.expression_index = self.expression_index.wrapping_add(1);
             self.expression_elapsed = Duration::ZERO;
@@ -294,7 +321,13 @@ impl Pet {
 
     fn speed_x(&self) -> f32 {
         let speed = self.effective_walk_speed_abs();
-        if self.hidden || self.dragging || speed <= 0.0 {
+        if self.hidden
+            || self.dragging
+            || speed <= 0.0
+            || self
+                .action_override
+                .is_some_and(|action| action.disables_movement())
+        {
             return 0.0;
         }
         if self.state != PetState::Walk {
@@ -317,6 +350,9 @@ impl Pet {
 
     fn movement_enabled(&self) -> bool {
         self.movement_speed_multiplier > 0.0
+            && !self
+                .action_override
+                .is_some_and(|action| action.disables_movement())
     }
 
     fn refresh_behavior_mode(&mut self) {
@@ -326,6 +362,8 @@ impl Pet {
             BehaviorMode::Dragging
         } else if self.hovered {
             BehaviorMode::Hovered
+        } else if self.action_override.is_some() {
+            BehaviorMode::Action
         } else if self.state == PetState::Walk && self.movement_enabled() {
             BehaviorMode::Walking
         } else {
@@ -340,6 +378,10 @@ impl Pet {
                 Personality::Cheerful => AnimationGroup::HoverCheerful,
                 Personality::Lively => AnimationGroup::HoverLively,
             },
+            BehaviorMode::Action => self
+                .action_override
+                .map(|action| action.animation_group())
+                .unwrap_or_else(|| self.default_expression_group()),
             BehaviorMode::Walking => AnimationGroup::WalkRight,
             BehaviorMode::Default => self.default_expression_group(),
         };
@@ -516,6 +558,51 @@ mod tests {
 
         assert_eq!(pet.behavior_mode(), BehaviorMode::Default);
         assert_eq!(pet.current_animation_group(), AnimationGroup::Idle);
+    }
+
+    #[test]
+    fn nap_micro_action_uses_sleepy_group_and_stops_movement() {
+        let mut pet = Pet::new();
+        pet.force_state_for_test(PetState::Walk);
+
+        pet.start_micro_action(MicroAction::Nap);
+        let tick = pet.tick(Duration::from_millis(16));
+
+        assert_eq!(pet.behavior_mode(), BehaviorMode::Action);
+        assert_eq!(pet.current_animation_group(), AnimationGroup::Sleepy);
+        assert_eq!(tick.speed_x, 0.0);
+    }
+
+    #[test]
+    fn cheer_up_micro_action_uses_happy_group_temporarily() {
+        let mut pet = Pet::new();
+
+        pet.start_micro_action(MicroAction::CheerUp);
+        pet.tick(Duration::from_secs(7));
+
+        assert_eq!(pet.behavior_mode(), BehaviorMode::Action);
+        assert_eq!(pet.current_animation_group(), AnimationGroup::Happy);
+
+        pet.tick(Duration::from_secs(1));
+
+        assert_eq!(pet.behavior_mode(), BehaviorMode::Walking);
+        assert_eq!(pet.current_animation_group(), AnimationGroup::WalkRight);
+    }
+
+    #[test]
+    fn hover_overrides_micro_action_until_hover_ends() {
+        let mut pet = Pet::new();
+
+        pet.start_micro_action(MicroAction::CheerUp);
+        pet.set_hovered(true);
+
+        assert_eq!(pet.behavior_mode(), BehaviorMode::Hovered);
+        assert_eq!(pet.current_animation_group(), AnimationGroup::HoverCheerful);
+
+        pet.set_hovered(false);
+
+        assert_eq!(pet.behavior_mode(), BehaviorMode::Action);
+        assert_eq!(pet.current_animation_group(), AnimationGroup::Happy);
     }
 
     #[test]

@@ -3,6 +3,7 @@ pub mod bundle;
 pub mod command_target_macos;
 pub mod interaction;
 pub mod menu_bar;
+pub mod micro_action;
 pub mod pet;
 pub mod physics;
 pub mod renderer;

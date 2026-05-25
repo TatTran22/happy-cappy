@@ -16,6 +16,7 @@ use crate::{
     bundle::current_resource_paths,
     interaction::{alpha_hit_test_with_flip, InteractionEvent, InteractionState, MouseButtonKind},
     menu_bar::MenuBarController,
+    micro_action::MicroAction,
     pet::{Direction, Pet, PetState},
     physics::{Bounds, Physics, Vec2},
     renderer::PetRenderer,
@@ -455,7 +456,18 @@ impl DesktopPetApp {
             }
             AppCommand::SetFocusMode(focus_mode) => self.set_focus_mode(focus_mode),
             AppCommand::ToggleFocusMode => self.set_focus_mode(!self.settings.focus_mode),
-            AppCommand::Nap | AppCommand::CheerUp => {}
+            AppCommand::Nap => {
+                self.pet.start_micro_action(MicroAction::Nap);
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            AppCommand::CheerUp => {
+                self.pet.start_micro_action(MicroAction::CheerUp);
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
             AppCommand::Quit => return false,
         }
         true
@@ -574,6 +586,7 @@ impl DesktopPetApp {
         match self.pet.behavior_mode() {
             crate::pet::BehaviorMode::Hovered
             | crate::pet::BehaviorMode::Dragging
+            | crate::pet::BehaviorMode::Action
             | crate::pet::BehaviorMode::Walking => TARGET_FRAME_TIME,
             crate::pet::BehaviorMode::Hidden => Duration::from_secs(5),
             crate::pet::BehaviorMode::Default => match self.pet.state() {
@@ -1081,6 +1094,34 @@ mod tests {
 
         assert!(app.handle_non_quit_command_for_test(AppCommand::SetFocusMode(false)));
         assert!(!app.settings_for_test().focus_mode);
+    }
+
+    #[test]
+    fn nap_command_starts_sleepy_action() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.settings_path = None;
+
+        assert!(app.handle_non_quit_command_for_test(AppCommand::Nap));
+
+        assert_eq!(app.pet.behavior_mode(), crate::pet::BehaviorMode::Action);
+        assert_eq!(
+            app.pet.current_animation_group(),
+            crate::pet::AnimationGroup::Sleepy
+        );
+    }
+
+    #[test]
+    fn cheer_up_command_starts_happy_action() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.settings_path = None;
+
+        assert!(app.handle_non_quit_command_for_test(AppCommand::CheerUp));
+
+        assert_eq!(app.pet.behavior_mode(), crate::pet::BehaviorMode::Action);
+        assert_eq!(
+            app.pet.current_animation_group(),
+            crate::pet::AnimationGroup::Happy
+        );
     }
 
     #[test]
