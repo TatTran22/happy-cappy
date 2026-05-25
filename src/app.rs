@@ -6,7 +6,7 @@ use std::{
 use log::{error, warn};
 use winit::{
     application::ApplicationHandler,
-    dpi::{PhysicalPosition, PhysicalSize},
+    dpi::{LogicalSize, PhysicalPosition},
     event::WindowEvent,
     event_loop::{ActiveEventLoop, ControlFlow},
     window::{Window, WindowAttributes, WindowId},
@@ -72,7 +72,7 @@ impl DesktopPetApp {
     fn create_window(&mut self, event_loop: &ActiveEventLoop) {
         let attributes = WindowAttributes::default()
             .with_title("DesktopPet")
-            .with_inner_size(PhysicalSize::new(WINDOW_SIZE, WINDOW_SIZE))
+            .with_inner_size(LogicalSize::new(WINDOW_SIZE as f64, WINDOW_SIZE as f64))
             .with_resizable(false)
             .with_decorations(false)
             .with_transparent(true);
