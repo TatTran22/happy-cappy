@@ -216,12 +216,21 @@ mod tests {
 
     #[test]
     fn load_missing_file_returns_defaults() {
-        let path = Path::new("/tmp/happy-cappy-missing-settings.json");
+        let root = std::env::temp_dir().join(format!(
+            "happy-cappy-settings-missing-{}",
+            fastrand::u64(..)
+        ));
+        let path = root.join("settings.json");
+        let _ = fs::remove_dir_all(&root);
+
+        assert!(!path.exists());
 
         let settings =
-            AppSettings::load_or_default_from(path, bounds(), Vec2 { x: 128.0, y: 128.0 });
+            AppSettings::load_or_default_from(&path, bounds(), Vec2 { x: 128.0, y: 128.0 });
 
         assert_eq!(settings, AppSettings::default());
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
