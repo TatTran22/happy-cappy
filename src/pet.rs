@@ -226,11 +226,17 @@ impl Pet {
     fn advance_state(&mut self, dt: Duration) {
         match self.state {
             PetState::Idle if self.state_elapsed >= Duration::from_secs(5) => {
-                if self.completed_walk_cycles >= 2 {
+                if !self.movement_enabled() {
+                    self.state_elapsed = Duration::ZERO;
+                    self.walk_distance_remaining = 0.0;
+                } else if self.completed_walk_cycles >= 2 {
                     self.enter_sleep();
                 } else {
                     self.enter_walk();
                 }
+            }
+            PetState::Walk if !self.movement_enabled() => {
+                self.enter_idle();
             }
             PetState::Walk => {
                 self.walk_distance_remaining -= self.effective_walk_speed_abs() * dt.as_secs_f32();
@@ -302,11 +308,15 @@ impl Pet {
     }
 
     fn effective_walk_speed_abs(&self) -> f32 {
-        if self.movement_speed_multiplier <= 0.0 {
+        if !self.movement_enabled() {
             return 0.0;
         }
 
         WALK_SPEED * self.movement_speed_multiplier
+    }
+
+    fn movement_enabled(&self) -> bool {
+        self.movement_speed_multiplier > 0.0
     }
 
     fn refresh_behavior_mode(&mut self) {
@@ -316,7 +326,7 @@ impl Pet {
             BehaviorMode::Dragging
         } else if self.hovered {
             BehaviorMode::Hovered
-        } else if self.state == PetState::Walk && self.movement_speed_multiplier > 0.0 {
+        } else if self.state == PetState::Walk && self.movement_enabled() {
             BehaviorMode::Walking
         } else {
             BehaviorMode::Default
@@ -468,6 +478,20 @@ mod tests {
 
         let tick = pet.tick(Duration::from_millis(16));
 
+        assert_eq!(pet.state(), PetState::Idle);
+        assert_eq!(pet.behavior_mode(), BehaviorMode::Default);
+        assert_eq!(tick.speed_x, 0.0);
+    }
+
+    #[test]
+    fn movement_speed_zero_prevents_entering_stuck_walk_state() {
+        let mut pet = Pet::new();
+        pet.set_movement_speed_multiplier(0.0);
+
+        let tick = pet.tick(Duration::from_secs(5));
+
+        assert_eq!(pet.state(), PetState::Idle);
+        assert_eq!(pet.behavior_mode(), BehaviorMode::Default);
         assert_eq!(tick.speed_x, 0.0);
     }
 
