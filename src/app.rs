@@ -8,7 +8,7 @@ use winit::{
     application::ApplicationHandler,
     dpi::{LogicalPosition, LogicalSize},
     event::WindowEvent,
-    event_loop::{ActiveEventLoop, ControlFlow},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy},
     window::{Window, WindowAttributes, WindowId},
 };
 
@@ -34,6 +34,21 @@ const MAX_TICK_DELTA: Duration = Duration::from_secs(1);
 const FALLBACK_BOUNDS_WIDTH: f32 = 800.0;
 const FALLBACK_BOUNDS_HEIGHT: f32 = 600.0;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AppCommand {
+    OpenSettings,
+    ShowPet,
+    HidePet,
+    TogglePetVisibility,
+    ResetPosition,
+    SetPersonality(crate::pet::Personality),
+    SetScale(f32),
+    SetMovementSpeed(f32),
+    SetHoverIntensity(f32),
+    SetMonitorBehavior(crate::settings::MonitorBehavior),
+    Quit,
+}
+
 pub struct DesktopPetApp {
     window: Option<Arc<Window>>,
     renderer: Option<PetRenderer>,
@@ -46,10 +61,15 @@ pub struct DesktopPetApp {
     settings: AppSettings,
     settings_path: Option<std::path::PathBuf>,
     pet_visible: bool,
+    event_proxy: Option<EventLoopProxy<AppCommand>>,
 }
 
 impl DesktopPetApp {
-    pub fn new() -> Self {
+    pub fn new(event_proxy: EventLoopProxy<AppCommand>) -> Self {
+        Self::new_with_event_proxy(Some(event_proxy))
+    }
+
+    fn new_with_event_proxy(event_proxy: Option<EventLoopProxy<AppCommand>>) -> Self {
         let seed = fastrand::u64(..);
         let now = Instant::now();
 
@@ -78,6 +98,7 @@ impl DesktopPetApp {
             settings: AppSettings::default(),
             settings_path: default_settings_path().ok(),
             pet_visible: true,
+            event_proxy,
         }
     }
 
@@ -310,6 +331,54 @@ impl DesktopPetApp {
         self.save_settings();
     }
 
+    fn handle_command(&mut self, command: AppCommand, event_loop: &ActiveEventLoop) {
+        match command {
+            AppCommand::OpenSettings => self.open_settings_window(),
+            AppCommand::ShowPet => self.set_pet_visible(true),
+            AppCommand::HidePet => self.set_pet_visible(false),
+            AppCommand::TogglePetVisibility => self.set_pet_visible(!self.pet_visible),
+            AppCommand::ResetPosition => self.reset_pet_position(),
+            AppCommand::SetPersonality(personality) => {
+                let mut settings = self.settings.clone();
+                settings.personality = personality;
+                self.apply_settings(settings);
+                self.save_settings();
+            }
+            AppCommand::SetScale(scale) => {
+                let mut settings = self.settings.clone();
+                settings.scale = scale;
+                settings.sanitize(self.physics.bounds, self.physics.size);
+                self.apply_settings(settings);
+                self.save_settings();
+            }
+            AppCommand::SetMovementSpeed(speed) => {
+                let mut settings = self.settings.clone();
+                settings.movement_speed = speed;
+                settings.sanitize(self.physics.bounds, self.physics.size);
+                self.apply_settings(settings);
+                self.save_settings();
+            }
+            AppCommand::SetHoverIntensity(intensity) => {
+                let mut settings = self.settings.clone();
+                settings.hover_intensity = intensity;
+                settings.sanitize(self.physics.bounds, self.physics.size);
+                self.apply_settings(settings);
+                self.save_settings();
+            }
+            AppCommand::SetMonitorBehavior(monitor_behavior) => {
+                let mut settings = self.settings.clone();
+                settings.monitor_behavior = monitor_behavior;
+                self.apply_settings(settings);
+                self.save_settings();
+            }
+            AppCommand::Quit => event_loop.exit(),
+        }
+    }
+
+    fn open_settings_window(&mut self) {
+        warn!("settings window is not available yet");
+    }
+
     #[allow(dead_code)]
     fn persist_current_position(&mut self) {
         self.settings.update_position(self.physics.position);
@@ -347,14 +416,12 @@ impl DesktopPetApp {
     }
 }
 
-impl Default for DesktopPetApp {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 impl DesktopPetApp {
+    fn new_for_test() -> Self {
+        Self::new_with_event_proxy(None)
+    }
+
     fn settings_for_test(&self) -> &crate::settings::AppSettings {
         &self.settings
     }
@@ -364,7 +431,7 @@ impl DesktopPetApp {
     }
 }
 
-impl ApplicationHandler for DesktopPetApp {
+impl ApplicationHandler<AppCommand> for DesktopPetApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.sprite_sheet.is_none() && !self.load_assets(event_loop) {
             return;
@@ -375,8 +442,16 @@ impl ApplicationHandler for DesktopPetApp {
         }
 
         if self.menu_bar.is_none() {
-            self.menu_bar = MenuBarController::new();
+            let Some(event_proxy) = self.event_proxy.as_ref() else {
+                warn!("menu bar requires an event loop proxy");
+                return;
+            };
+            self.menu_bar = MenuBarController::new(event_proxy.clone());
         }
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AppCommand) {
+        self.handle_command(event, event_loop);
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -433,7 +508,7 @@ mod tests {
 
     #[test]
     fn redraw_wakeups_do_not_bypass_next_tick_deadline() {
-        let mut app = DesktopPetApp::new();
+        let mut app = DesktopPetApp::new_for_test();
         let now = Instant::now();
         app.next_tick_at = now + IDLE_FRAME_TIME;
 
@@ -443,7 +518,7 @@ mod tests {
 
     #[test]
     fn applying_settings_updates_pet_personality_and_visibility() {
-        let mut app = DesktopPetApp::new();
+        let mut app = DesktopPetApp::new_for_test();
         let settings = crate::settings::AppSettings {
             personality: crate::pet::Personality::Lively,
             pet_visible: false,
@@ -465,7 +540,7 @@ mod tests {
 
     #[test]
     fn applying_settings_clamps_restored_position_after_scale_and_syncs_settings() {
-        let mut app = DesktopPetApp::new();
+        let mut app = DesktopPetApp::new_for_test();
         app.physics.bounds = Bounds {
             min_x: 0.0,
             min_y: 0.0,
@@ -490,7 +565,7 @@ mod tests {
 
     #[test]
     fn applying_larger_scale_without_restored_position_clamps_current_position() {
-        let mut app = DesktopPetApp::new();
+        let mut app = DesktopPetApp::new_for_test();
         app.physics.bounds = Bounds {
             min_x: 0.0,
             min_y: 0.0,
