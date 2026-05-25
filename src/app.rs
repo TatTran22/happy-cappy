@@ -14,6 +14,7 @@ use winit::{
 
 use crate::{
     bundle::current_resource_paths,
+    interaction::{alpha_hit_test_with_flip, InteractionEvent, InteractionState, MouseButtonKind},
     menu_bar::MenuBarController,
     pet::{Direction, Pet, PetState},
     physics::{Bounds, Physics, Vec2},
@@ -61,6 +62,8 @@ pub struct DesktopPetApp {
     settings: AppSettings,
     settings_path: Option<std::path::PathBuf>,
     pet_visible: bool,
+    interaction: InteractionState,
+    last_cursor_position: Option<Vec2>,
     #[cfg(not(test))]
     event_proxy: EventLoopProxy<AppCommand>,
     #[cfg(test)]
@@ -84,6 +87,8 @@ impl DesktopPetApp {
             settings: AppSettings::default(),
             settings_path: default_settings_path().ok(),
             pet_visible: true,
+            interaction: InteractionState::default(),
+            last_cursor_position: None,
             #[cfg(not(test))]
             event_proxy,
             #[cfg(test)]
@@ -108,6 +113,8 @@ impl DesktopPetApp {
             settings: AppSettings::default(),
             settings_path: default_settings_path().ok(),
             pet_visible: true,
+            interaction: InteractionState::default(),
+            last_cursor_position: None,
             event_proxy,
         }
     }
@@ -389,6 +396,20 @@ impl DesktopPetApp {
         warn!("settings window is not available yet");
     }
 
+    fn show_context_menu(&self) {
+        #[cfg(not(test))]
+        {
+            crate::window_macos::show_pet_context_menu(self.event_proxy.clone(), self.pet_visible);
+        }
+
+        #[cfg(test)]
+        {
+            if let Some(event_proxy) = self.event_proxy.as_ref() {
+                crate::window_macos::show_pet_context_menu(event_proxy.clone(), self.pet_visible);
+            }
+        }
+    }
+
     #[allow(dead_code)]
     fn persist_current_position(&mut self) {
         self.settings.update_position(self.physics.position);
@@ -422,6 +443,62 @@ impl DesktopPetApp {
 
         if let Err(error) = renderer.draw(sprite_sheet.image(), rect, flip_x) {
             warn!("failed to draw desktop pet frame: {error}");
+        }
+    }
+
+    fn mouse_button_kind(button: winit::event::MouseButton) -> MouseButtonKind {
+        match button {
+            winit::event::MouseButton::Left => MouseButtonKind::Left,
+            winit::event::MouseButton::Right => MouseButtonKind::Right,
+            _ => MouseButtonKind::Other,
+        }
+    }
+
+    fn current_sprite_hit_test(&self, point: Vec2) -> bool {
+        let Some(sprite_sheet) = &self.sprite_sheet else {
+            return false;
+        };
+        let group = self.pet.current_animation_group();
+        let rect = sprite_sheet.frame_rect(SpriteRow::from(group), self.pet.frame_index());
+        let scale = if self.settings.scale.is_finite() && self.settings.scale > 0.0 {
+            self.settings.scale
+        } else {
+            AppSettings::MIN_SCALE
+        };
+        let scaled_point = Vec2 {
+            x: point.x / scale,
+            y: point.y / scale,
+        };
+        let flip_x = group == crate::pet::AnimationGroup::WalkRight
+            && self.pet.direction() == Direction::Left;
+        alpha_hit_test_with_flip(sprite_sheet.image(), rect, scaled_point, flip_x)
+    }
+
+    fn handle_interaction_events(&mut self, events: Vec<InteractionEvent>) {
+        for event in events {
+            match event {
+                InteractionEvent::HoverChanged(hovered) => {
+                    self.pet.set_hovered(hovered);
+                }
+                InteractionEvent::DragStarted { .. } => {
+                    self.pet.set_dragging(true);
+                }
+                InteractionEvent::DragMoved { delta } => {
+                    self.physics.position.x += delta.x;
+                    self.physics.position.y += delta.y;
+                    self.physics.clamp_to_bounds();
+                    self.move_window_to_pet();
+                }
+                InteractionEvent::DragEnded { .. } => {
+                    self.pet.set_dragging(false);
+                    self.physics.clamp_to_bounds();
+                    self.move_window_to_pet();
+                    self.persist_current_position();
+                }
+                InteractionEvent::ContextMenuRequested { .. } => {
+                    self.show_context_menu();
+                }
+            }
         }
     }
 }
@@ -515,6 +592,32 @@ impl ApplicationHandler<AppCommand> for DesktopPetApp {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::RedrawRequested => self.draw(),
+            WindowEvent::CursorMoved { position, .. } => {
+                let point = Vec2 {
+                    x: position.x as f32,
+                    y: position.y as f32,
+                };
+                self.last_cursor_position = Some(point);
+                let hit = self.current_sprite_hit_test(point);
+                let events = self.interaction.pointer_moved(point, hit);
+                self.handle_interaction_events(events);
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                let Some(point) = self.last_cursor_position else {
+                    return;
+                };
+                let button = Self::mouse_button_kind(button);
+                let hit = self.current_sprite_hit_test(point);
+                let events = match state {
+                    winit::event::ElementState::Pressed => {
+                        self.interaction.mouse_pressed(point, button, hit)
+                    }
+                    winit::event::ElementState::Released => {
+                        self.interaction.mouse_released(point, button, hit)
+                    }
+                };
+                self.handle_interaction_events(events);
+            }
             WindowEvent::Resized(size) => {
                 if let Some(renderer) = self.renderer.as_mut() {
                     if let Err(error) = renderer.resize(size.width, size.height) {
@@ -619,5 +722,21 @@ mod tests {
         assert_eq!(app.physics.size, Vec2 { x: 192.0, y: 192.0 });
         assert_eq!(app.physics.position, Vec2 { x: 108.0, y: 108.0 });
         assert_eq!(app.settings_for_test().last_position, None);
+    }
+
+    #[test]
+    fn mouse_button_kind_maps_winit_buttons_to_interaction_buttons() {
+        assert_eq!(
+            DesktopPetApp::mouse_button_kind(winit::event::MouseButton::Left),
+            MouseButtonKind::Left
+        );
+        assert_eq!(
+            DesktopPetApp::mouse_button_kind(winit::event::MouseButton::Right),
+            MouseButtonKind::Right
+        );
+        assert_eq!(
+            DesktopPetApp::mouse_button_kind(winit::event::MouseButton::Middle),
+            MouseButtonKind::Other
+        );
     }
 }

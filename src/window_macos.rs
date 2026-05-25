@@ -43,10 +43,38 @@ impl Error for WindowTweaksError {
 
 pub fn apply_desktop_pet_window_behavior(window: &Window) -> Result<(), WindowTweaksError> {
     window.set_window_level(WindowLevel::AlwaysOnTop);
-    window
-        .set_cursor_hittest(false)
-        .map_err(WindowTweaksError::CursorHitTest)?;
+    set_pet_window_mouse_passthrough(window, false)?;
     apply_platform_window_behavior(window)
+}
+
+pub fn set_pet_window_mouse_passthrough(
+    window: &Window,
+    passthrough: bool,
+) -> Result<(), WindowTweaksError> {
+    window
+        .set_cursor_hittest(!passthrough)
+        .map_err(WindowTweaksError::CursorHitTest)?;
+
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSView;
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        let handle = window
+            .window_handle()
+            .map_err(WindowTweaksError::WindowHandle)?
+            .as_raw();
+        let RawWindowHandle::AppKit(handle) = handle else {
+            return Ok(());
+        };
+        let ns_view = unsafe { handle.ns_view.cast::<NSView>().as_ref() };
+        let ns_window = ns_view
+            .window()
+            .ok_or(WindowTweaksError::MissingAppKitWindow)?;
+        ns_window.setIgnoresMouseEvents(passthrough);
+    }
+
+    Ok(())
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -79,7 +107,6 @@ fn apply_platform_window_behavior(window: &Window) -> Result<(), WindowTweaksErr
         .ok_or(WindowTweaksError::MissingAppKitWindow)?;
 
     ns_window.setHasShadow(false);
-    ns_window.setIgnoresMouseEvents(true);
     ns_window.setCollectionBehavior(
         NSWindowCollectionBehavior::CanJoinAllSpaces
             | NSWindowCollectionBehavior::FullScreenAuxiliary
@@ -87,4 +114,69 @@ fn apply_platform_window_behavior(window: &Window) -> Result<(), WindowTweaksErr
     );
 
     Ok(())
+}
+
+pub fn show_pet_context_menu(
+    proxy: winit::event_loop::EventLoopProxy<crate::app::AppCommand>,
+    pet_visible: bool,
+) {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::{runtime::AnyObject, MainThreadOnly};
+        use objc2_app_kit::{NSMenu, NSMenuItem};
+        use objc2_foundation::{ns_string, MainThreadMarker, NSPoint};
+
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let target = crate::command_target_macos::CommandTarget::new(mtm, proxy);
+        let target_object: &AnyObject = target.as_ref();
+        let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), ns_string!("Happy Cappy"));
+        let settings = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                ns_string!("Settings..."),
+                Some(crate::command_target_macos::CommandTarget::command_selector()),
+                ns_string!(""),
+            )
+        };
+        let hide = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                if pet_visible {
+                    ns_string!("Hide Pet")
+                } else {
+                    ns_string!("Show Pet")
+                },
+                Some(crate::command_target_macos::CommandTarget::command_selector()),
+                ns_string!(""),
+            )
+        };
+        let reset = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                ns_string!("Reset Position"),
+                Some(crate::command_target_macos::CommandTarget::command_selector()),
+                ns_string!(""),
+            )
+        };
+        settings.setTag(crate::menu_bar::MENU_TAG_SETTINGS);
+        hide.setTag(crate::menu_bar::MENU_TAG_SHOW_HIDE);
+        reset.setTag(crate::menu_bar::MENU_TAG_RESET);
+        unsafe {
+            settings.setTarget(Some(target_object));
+            hide.setTarget(Some(target_object));
+            reset.setTarget(Some(target_object));
+        }
+        menu.addItem(&settings);
+        menu.addItem(&hide);
+        menu.addItem(&reset);
+        menu.popUpMenuPositioningItem_atLocation_inView(None, NSPoint::new(0.0, 0.0), None);
+        let _keep_target_alive_until_menu_returns = target;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (proxy, pet_visible);
+    }
 }
