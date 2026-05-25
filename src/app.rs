@@ -18,6 +18,7 @@ use crate::{
     pet::{Direction, Pet, PetState},
     physics::{Bounds, Physics, Vec2},
     renderer::PetRenderer,
+    settings::{default_settings_path, AppSettings, SettingsError},
     sprite::{SpriteRow, SpriteSheet},
     window_macos::apply_desktop_pet_window_behavior,
 };
@@ -42,6 +43,9 @@ pub struct DesktopPetApp {
     last_tick: Instant,
     next_tick_at: Instant,
     menu_bar: Option<MenuBarController>,
+    settings: AppSettings,
+    settings_path: Option<std::path::PathBuf>,
+    pet_visible: bool,
 }
 
 impl DesktopPetApp {
@@ -71,6 +75,9 @@ impl DesktopPetApp {
             last_tick: now,
             next_tick_at: now,
             menu_bar: None,
+            settings: AppSettings::default(),
+            settings_path: default_settings_path().ok(),
+            pet_visible: true,
         }
     }
 
@@ -97,6 +104,10 @@ impl DesktopPetApp {
 
         self.window = Some(Arc::clone(&window));
         self.update_bounds_from_window(event_loop);
+        self.load_settings();
+        if !self.pet_visible {
+            window.set_visible(false);
+        }
         self.move_window_to_pet();
 
         let surface_size = window.inner_size();
@@ -204,6 +215,94 @@ impl DesktopPetApp {
         }
     }
 
+    fn apply_settings(&mut self, settings: AppSettings) {
+        self.pet.apply_personality(settings.personality);
+        self.pet
+            .set_movement_speed_multiplier(settings.movement_speed);
+        self.pet.set_hover_intensity(settings.hover_intensity);
+        self.pet.set_hidden(!settings.pet_visible);
+        self.pet_visible = settings.pet_visible;
+        self.physics.size = Vec2 {
+            x: FRAME_SIZE as f32 * settings.scale,
+            y: FRAME_SIZE as f32 * settings.scale,
+        };
+
+        if let Some(position) = settings.restored_position() {
+            self.physics.position = position;
+            self.physics.clamp_to_bounds();
+        }
+
+        self.settings = settings;
+        if let Some(window) = &self.window {
+            let size = LogicalSize::new(self.physics.size.x as f64, self.physics.size.y as f64);
+            let _ = window.request_inner_size(size);
+        }
+        self.move_window_to_pet();
+    }
+
+    #[allow(dead_code)]
+    fn save_settings(&self) {
+        let Some(path) = &self.settings_path else {
+            warn!("settings path is unavailable");
+            return;
+        };
+        if let Err(error) = self.settings.save_to(path) {
+            warn!("failed to save settings: {error}");
+        }
+    }
+
+    fn load_settings(&mut self) {
+        let Some(path) = &self.settings_path else {
+            return;
+        };
+        let settings = match AppSettings::load_from(path) {
+            Ok(mut settings) => {
+                settings.sanitize(self.physics.bounds, self.physics.size);
+                settings
+            }
+            Err(error) => {
+                if !matches!(
+                    &error,
+                    SettingsError::Io(io_error)
+                        if io_error.kind() == std::io::ErrorKind::NotFound
+                ) {
+                    warn!("failed to load settings from {}: {error}", path.display());
+                }
+                AppSettings::default()
+            }
+        };
+        self.apply_settings(settings);
+    }
+
+    #[allow(dead_code)]
+    fn set_pet_visible(&mut self, visible: bool) {
+        self.settings.pet_visible = visible;
+        self.pet_visible = visible;
+        self.pet.set_hidden(!visible);
+        if let Some(window) = &self.window {
+            window.set_visible(visible);
+        }
+        self.save_settings();
+    }
+
+    #[allow(dead_code)]
+    fn reset_pet_position(&mut self) {
+        self.physics.position = Vec2 {
+            x: self.physics.bounds.min_x + 120.0,
+            y: self.physics.bounds.min_y + 120.0,
+        };
+        self.physics.clamp_to_bounds();
+        self.settings.update_position(self.physics.position);
+        self.move_window_to_pet();
+        self.save_settings();
+    }
+
+    #[allow(dead_code)]
+    fn persist_current_position(&mut self) {
+        self.settings.update_position(self.physics.position);
+        self.save_settings();
+    }
+
     fn tick_due(&self, now: Instant) -> bool {
         now >= self.next_tick_at
     }
@@ -238,6 +337,17 @@ impl DesktopPetApp {
 impl Default for DesktopPetApp {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+impl DesktopPetApp {
+    fn settings_for_test(&self) -> &crate::settings::AppSettings {
+        &self.settings
+    }
+
+    fn apply_settings_for_test(&mut self, settings: crate::settings::AppSettings) {
+        self.apply_settings(settings);
     }
 }
 
@@ -316,5 +426,23 @@ mod tests {
 
         assert!(!app.tick_due(now + Duration::from_millis(1)));
         assert!(app.tick_due(now + IDLE_FRAME_TIME));
+    }
+
+    #[test]
+    fn applying_settings_updates_pet_personality_and_visibility() {
+        let mut app = DesktopPetApp::new();
+        let settings = crate::settings::AppSettings {
+            personality: crate::pet::Personality::Lively,
+            pet_visible: false,
+            ..crate::settings::AppSettings::default()
+        };
+
+        app.apply_settings_for_test(settings);
+
+        assert_eq!(
+            app.settings_for_test().personality,
+            crate::pet::Personality::Lively
+        );
+        assert!(!app.settings_for_test().pet_visible);
     }
 }
