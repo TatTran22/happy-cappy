@@ -3,6 +3,13 @@
 #[cfg(not(target_os = "macos"))]
 pub struct CommandTarget;
 
+#[cfg(not(target_os = "macos"))]
+impl CommandTarget {
+    pub fn new(_proxy: winit::event_loop::EventLoopProxy<crate::app::AppCommand>) -> Option<Self> {
+        None
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod macos {
     use log::warn;

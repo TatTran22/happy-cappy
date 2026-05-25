@@ -61,14 +61,37 @@ pub struct DesktopPetApp {
     settings: AppSettings,
     settings_path: Option<std::path::PathBuf>,
     pet_visible: bool,
+    #[cfg(not(test))]
+    event_proxy: EventLoopProxy<AppCommand>,
+    #[cfg(test)]
     event_proxy: Option<EventLoopProxy<AppCommand>>,
 }
 
 impl DesktopPetApp {
     pub fn new(event_proxy: EventLoopProxy<AppCommand>) -> Self {
-        Self::new_with_event_proxy(Some(event_proxy))
+        let seed = fastrand::u64(..);
+        let now = Instant::now();
+
+        Self {
+            window: None,
+            renderer: None,
+            sprite_sheet: None,
+            pet: Pet::new_with_seed(seed),
+            physics: default_physics(),
+            last_tick: now,
+            next_tick_at: now,
+            menu_bar: None,
+            settings: AppSettings::default(),
+            settings_path: default_settings_path().ok(),
+            pet_visible: true,
+            #[cfg(not(test))]
+            event_proxy,
+            #[cfg(test)]
+            event_proxy: Some(event_proxy),
+        }
     }
 
+    #[cfg(test)]
     fn new_with_event_proxy(event_proxy: Option<EventLoopProxy<AppCommand>>) -> Self {
         let seed = fastrand::u64(..);
         let now = Instant::now();
@@ -78,20 +101,7 @@ impl DesktopPetApp {
             renderer: None,
             sprite_sheet: None,
             pet: Pet::new_with_seed(seed),
-            physics: Physics {
-                position: Vec2 { x: 120.0, y: 120.0 },
-                velocity: Vec2 { x: 0.0, y: 0.0 },
-                size: Vec2 {
-                    x: WINDOW_SIZE as f32,
-                    y: WINDOW_SIZE as f32,
-                },
-                bounds: Bounds {
-                    min_x: 0.0,
-                    min_y: 0.0,
-                    max_x: FALLBACK_BOUNDS_WIDTH,
-                    max_y: FALLBACK_BOUNDS_HEIGHT,
-                },
-            },
+            physics: default_physics(),
             last_tick: now,
             next_tick_at: now,
             menu_bar: None,
@@ -416,6 +426,23 @@ impl DesktopPetApp {
     }
 }
 
+fn default_physics() -> Physics {
+    Physics {
+        position: Vec2 { x: 120.0, y: 120.0 },
+        velocity: Vec2 { x: 0.0, y: 0.0 },
+        size: Vec2 {
+            x: WINDOW_SIZE as f32,
+            y: WINDOW_SIZE as f32,
+        },
+        bounds: Bounds {
+            min_x: 0.0,
+            min_y: 0.0,
+            max_x: FALLBACK_BOUNDS_WIDTH,
+            max_y: FALLBACK_BOUNDS_HEIGHT,
+        },
+    }
+}
+
 #[cfg(test)]
 impl DesktopPetApp {
     fn new_for_test() -> Self {
@@ -442,11 +469,19 @@ impl ApplicationHandler<AppCommand> for DesktopPetApp {
         }
 
         if self.menu_bar.is_none() {
-            let Some(event_proxy) = self.event_proxy.as_ref() else {
-                warn!("menu bar requires an event loop proxy");
-                return;
-            };
-            self.menu_bar = MenuBarController::new(event_proxy.clone());
+            #[cfg(not(test))]
+            {
+                self.menu_bar = MenuBarController::new(self.event_proxy.clone());
+            }
+
+            #[cfg(test)]
+            {
+                let Some(event_proxy) = self.event_proxy.as_ref() else {
+                    warn!("menu bar requires an event loop proxy");
+                    return;
+                };
+                self.menu_bar = MenuBarController::new(event_proxy.clone());
+            }
         }
     }
 
