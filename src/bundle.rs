@@ -21,15 +21,20 @@ pub fn current_resource_paths() -> std::io::Result<ResourcePaths> {
 }
 
 fn resources_dir_from_executable(executable_path: &Path) -> PathBuf {
-    let components: Vec<_> = executable_path.components().collect();
-    let has_app_bundle = components
-        .iter()
-        .any(|component| component.as_os_str().to_string_lossy().ends_with(".app"));
-
-    if has_app_bundle {
-        if let Some(macos_dir) = executable_path.parent() {
+    if let Some(macos_dir) = executable_path.parent() {
+        if macos_dir.file_name().is_some_and(|name| name == "MacOS") {
             if let Some(contents_dir) = macos_dir.parent() {
-                return contents_dir.join("Resources");
+                let has_contents_dir = contents_dir
+                    .file_name()
+                    .is_some_and(|name| name == "Contents");
+                let has_app_bundle = contents_dir
+                    .parent()
+                    .and_then(Path::extension)
+                    .is_some_and(|extension| extension == "app");
+
+                if has_contents_dir && has_app_bundle {
+                    return contents_dir.join("Resources");
+                }
             }
         }
     }
@@ -54,6 +59,16 @@ mod tests {
     #[test]
     fn development_binary_resolves_to_assets_directory() {
         let executable = Path::new("/repo/target/debug/desktop-pet");
+        let paths = resource_paths_from_executable(executable);
+        assert_eq!(
+            paths.sprite_sheet,
+            PathBuf::from("assets/pet_spritesheet.png")
+        );
+    }
+
+    #[test]
+    fn app_named_parent_outside_bundle_resolves_to_assets_directory() {
+        let executable = Path::new("/tmp/Foo.app/build/target/debug/desktop-pet");
         let paths = resource_paths_from_executable(executable);
         assert_eq!(
             paths.sprite_sheet,

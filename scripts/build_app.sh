@@ -6,15 +6,22 @@ APP_DIR="$ROOT_DIR/dist/DesktopPet.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
+SPRITE_PATH="$ROOT_DIR/assets/pet_spritesheet.png"
 
-cargo build --release
+if [[ ! -f "$SPRITE_PATH" ]]; then
+  echo "Missing sprite asset: $SPRITE_PATH" >&2
+  echo "Run Task 7 to create assets/pet_spritesheet.png before building the app bundle." >&2
+  exit 1
+fi
+
+cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --release
 
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
 cp "$ROOT_DIR/target/release/desktop-pet" "$MACOS_DIR/desktop-pet"
 cp "$ROOT_DIR/packaging/Info.plist" "$CONTENTS_DIR/Info.plist"
-cp "$ROOT_DIR/assets/pet_spritesheet.png" "$RESOURCES_DIR/pet_spritesheet.png"
+cp "$SPRITE_PATH" "$RESOURCES_DIR/pet_spritesheet.png"
 
 chmod +x "$MACOS_DIR/desktop-pet"
 
