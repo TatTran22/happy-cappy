@@ -35,6 +35,7 @@ const IDLE_FRAME_MS: u64 = 200;
 const WALK_FRAME_MS: u64 = 100;
 const SLEEP_FRAME_MS: u64 = 500;
 const WALK_SPEED: f32 = 45.0;
+const WALK_DISTANCE: f32 = 120.0;
 
 impl Default for Pet {
     fn default() -> Self {
@@ -129,7 +130,7 @@ impl Pet {
         self.frame_index = 0;
         self.frame_elapsed = Duration::ZERO;
         self.state_elapsed = Duration::ZERO;
-        self.walk_distance_remaining = 120.0;
+        self.walk_distance_remaining = WALK_DISTANCE;
     }
 
     fn frame_duration(&self) -> Duration {
@@ -157,6 +158,10 @@ impl Pet {
         self.frame_index = 0;
         self.frame_elapsed = Duration::ZERO;
         self.state_elapsed = Duration::ZERO;
+        self.walk_distance_remaining = match state {
+            PetState::Walk => WALK_DISTANCE,
+            PetState::Idle | PetState::Sleep => 0.0,
+        };
     }
 }
 
@@ -184,6 +189,69 @@ mod tests {
         let mut pet = Pet::new_with_seed(1);
         pet.tick(Duration::from_secs(5));
         assert_eq!(pet.state(), PetState::Walk);
+    }
+
+    #[test]
+    fn forced_walk_preserves_walk_distance_invariant() {
+        let mut pet = Pet::new();
+        pet.force_state_for_test(PetState::Walk);
+
+        let tick = pet.tick(Duration::from_millis(1));
+
+        assert_eq!(pet.state(), PetState::Walk);
+        assert_eq!(tick.state, PetState::Walk);
+        assert_eq!(tick.speed_x, WALK_SPEED);
+    }
+
+    #[test]
+    fn walk_speed_sign_follows_seed_direction() {
+        let mut right_pet = Pet::new_with_seed(0);
+        right_pet.force_state_for_test(PetState::Walk);
+        assert_eq!(right_pet.direction(), Direction::Right);
+        assert_eq!(right_pet.tick(Duration::ZERO).speed_x, WALK_SPEED);
+
+        let mut left_pet = Pet::new_with_seed(1);
+        left_pet.force_state_for_test(PetState::Walk);
+        assert_eq!(left_pet.direction(), Direction::Left);
+        assert_eq!(left_pet.tick(Duration::ZERO).speed_x, -WALK_SPEED);
+    }
+
+    #[test]
+    fn walk_returns_to_idle_after_configured_distance() {
+        let mut pet = Pet::new();
+        pet.force_state_for_test(PetState::Walk);
+
+        let tick = pet.tick(Duration::from_secs_f32(WALK_DISTANCE / WALK_SPEED));
+
+        assert_eq!(pet.state(), PetState::Idle);
+        assert_eq!(tick.state, PetState::Idle);
+        assert_eq!(tick.frame_index, 0);
+        assert_eq!(tick.speed_x, 0.0);
+    }
+
+    #[test]
+    fn sleep_returns_to_idle_after_12_seconds() {
+        let mut pet = Pet::new();
+        pet.force_state_for_test(PetState::Sleep);
+
+        let tick = pet.tick(Duration::from_secs(12));
+
+        assert_eq!(pet.state(), PetState::Idle);
+        assert_eq!(tick.state, PetState::Idle);
+        assert_eq!(tick.frame_index, 0);
+        assert_eq!(tick.speed_x, 0.0);
+    }
+
+    #[test]
+    fn tick_reports_walk_at_idle_to_walk_boundary() {
+        let mut pet = Pet::new_with_seed(1);
+
+        let tick = pet.tick(Duration::from_secs(5));
+
+        assert_eq!(pet.state(), PetState::Walk);
+        assert_eq!(tick.state, PetState::Walk);
+        assert_eq!(tick.frame_index, 0);
+        assert_eq!(tick.speed_x, -WALK_SPEED);
     }
 
     #[test]
