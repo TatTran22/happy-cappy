@@ -1,0 +1,36 @@
+[package]
+name = "desktop-pet"
+version = "0.1.0"
+edition = "2021"
+description = "A small native macOS desktop pet."
+license = "UNLICENSED"
+
+[dependencies]
+env_logger = "0.11"
+fastrand = "2"
+image = { version = "0.25", default-features = false, features = ["png"] }
+log = "0.4"
+pixels = "0.17.1"
+winit = "0.30.13"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = [
+  "NSApplication",
+  "NSMenu",
+  "NSMenuItem",
+  "NSResponder",
+  "NSStatusBar",
+  "NSStatusItem",
+  "NSView",
+  "NSWindow",
+  "objc2-core-foundation",
+] }
+objc2-foundation = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
