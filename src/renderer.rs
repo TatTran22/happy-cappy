@@ -21,33 +21,76 @@ pub fn blit_frame(
     frame_height: u32,
     options: BlitOptions,
 ) {
+    let Some(required_frame_len) = frame_len(frame_width, frame_height) else {
+        return;
+    };
+    if frame.len() < required_frame_len {
+        return;
+    }
+
+    let frame_width_i64 = i64::from(frame_width);
+    let frame_height_i64 = i64::from(frame_height);
+
     for local_y in 0..rect.height {
-        let dest_y = options.dest_y + local_y as i32;
-        if dest_y < 0 || dest_y >= frame_height as i32 {
+        let dest_y = i64::from(options.dest_y) + i64::from(local_y);
+        if dest_y < 0 || dest_y >= frame_height_i64 {
             continue;
         }
 
         for local_x in 0..rect.width {
-            let dest_x = options.dest_x + local_x as i32;
-            if dest_x < 0 || dest_x >= frame_width as i32 {
+            let dest_x = i64::from(options.dest_x) + i64::from(local_x);
+            if dest_x < 0 || dest_x >= frame_width_i64 {
                 continue;
             }
 
-            let source_x = if options.flip_x {
-                rect.x + rect.width - 1 - local_x
-            } else {
-                rect.x + local_x
+            let Some(source_x) = source_x(rect, local_x, options.flip_x) else {
+                continue;
             };
-            let source_y = rect.y + local_y;
+            let Some(source_y) = rect.y.checked_add(local_y) else {
+                continue;
+            };
+            if source_x >= source.width() || source_y >= source.height() {
+                continue;
+            }
+
             let src = source.get_pixel(source_x, source_y).0;
             if src[3] == 0 {
                 continue;
             }
 
-            let offset = ((dest_y as u32 * frame_width + dest_x as u32) * 4) as usize;
+            let Some(offset) = pixel_offset(dest_x, dest_y, frame_width) else {
+                continue;
+            };
             alpha_blend_pixel(src, &mut frame[offset..offset + 4]);
         }
     }
+}
+
+fn frame_len(frame_width: u32, frame_height: u32) -> Option<usize> {
+    let pixels = usize::try_from(frame_width)
+        .ok()?
+        .checked_mul(usize::try_from(frame_height).ok()?)?;
+    pixels.checked_mul(4)
+}
+
+fn source_x(rect: FrameRect, local_x: u32, flip_x: bool) -> Option<u32> {
+    if flip_x {
+        rect.x
+            .checked_add(rect.width)?
+            .checked_sub(1)?
+            .checked_sub(local_x)
+    } else {
+        rect.x.checked_add(local_x)
+    }
+}
+
+fn pixel_offset(dest_x: i64, dest_y: i64, frame_width: u32) -> Option<usize> {
+    let dest_x = usize::try_from(dest_x).ok()?;
+    let dest_y = usize::try_from(dest_y).ok()?;
+    let frame_width = usize::try_from(frame_width).ok()?;
+    let row_offset = dest_y.checked_mul(frame_width)?;
+    let pixel_index = row_offset.checked_add(dest_x)?;
+    pixel_index.checked_mul(4)
 }
 
 fn alpha_blend_pixel(src: [u8; 4], dst: &mut [u8]) {
@@ -74,6 +117,7 @@ fn alpha_blend_pixel(src: [u8; 4], dst: &mut [u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
 
     #[test]
     fn clear_sets_every_byte_to_zero() {
@@ -214,5 +258,118 @@ mod tests {
         );
 
         assert_eq!(frame, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn blit_short_frame_buffer_returns_without_panicking() {
+        let source = RgbaImage::from_pixel(1, 1, image::Rgba([10, 20, 30, 255]));
+        let mut frame = vec![1, 2, 3];
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            blit_frame(
+                &source,
+                FrameRect {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                },
+                &mut frame,
+                1,
+                1,
+                BlitOptions {
+                    dest_x: 0,
+                    dest_y: 0,
+                    flip_x: false,
+                },
+            );
+        }));
+
+        assert!(result.is_ok());
+        assert_eq!(frame, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn blit_skips_source_pixels_outside_source_bounds() {
+        let source = RgbaImage::from_pixel(1, 1, image::Rgba([10, 20, 30, 255]));
+        let mut frame = vec![0; 4 * 2];
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            blit_frame(
+                &source,
+                FrameRect {
+                    x: 0,
+                    y: 0,
+                    width: 2,
+                    height: 1,
+                },
+                &mut frame,
+                2,
+                1,
+                BlitOptions {
+                    dest_x: 0,
+                    dest_y: 0,
+                    flip_x: false,
+                },
+            );
+        }));
+
+        assert!(result.is_ok());
+        assert_eq!(&frame[0..4], &[10, 20, 30, 255]);
+        assert_eq!(&frame[4..8], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn blit_alpha_blends_onto_transparent_destination() {
+        let source = RgbaImage::from_pixel(1, 1, image::Rgba([100, 50, 0, 128]));
+        let mut frame = vec![0, 0, 0, 0];
+
+        blit_frame(
+            &source,
+            FrameRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            &mut frame,
+            1,
+            1,
+            BlitOptions {
+                dest_x: 0,
+                dest_y: 0,
+                flip_x: false,
+            },
+        );
+
+        assert_eq!(frame, vec![100, 50, 0, 128]);
+    }
+
+    #[test]
+    fn blit_alpha_blends_with_partially_transparent_destination() {
+        let source = RgbaImage::from_pixel(1, 1, image::Rgba([100, 0, 0, 128]));
+        let mut frame = vec![0, 0, 100, 128];
+
+        blit_frame(
+            &source,
+            FrameRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            &mut frame,
+            1,
+            1,
+            BlitOptions {
+                dest_x: 0,
+                dest_y: 0,
+                flip_x: false,
+            },
+        );
+
+        assert_eq!(frame[3], 192);
+        assert!(frame[0] >= 66 && frame[0] <= 67);
+        assert!(frame[2] >= 33 && frame[2] <= 34);
     }
 }
