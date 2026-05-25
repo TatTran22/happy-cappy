@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{error::Error, fmt, path::Path};
 
 use image::RgbaImage;
 
@@ -20,12 +20,52 @@ pub struct FrameRect {
 #[derive(Debug)]
 pub enum SpriteError {
     Image(image::ImageError),
-    InvalidDimensions { width: u32, height: u32 },
+    InvalidDimensions {
+        width: u32,
+        height: u32,
+        expected_width: Option<u32>,
+        expected_height: Option<u32>,
+        frame_size: u32,
+    },
 }
 
 impl From<image::ImageError> for SpriteError {
     fn from(value: image::ImageError) -> Self {
         Self::Image(value)
+    }
+}
+
+impl fmt::Display for SpriteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Image(error) => write!(f, "failed to load sprite image: {error}"),
+            Self::InvalidDimensions {
+                width,
+                height,
+                expected_width,
+                expected_height,
+                frame_size,
+            } => {
+                let expected = match (expected_width, expected_height) {
+                    (Some(width), Some(height)) => format!("{width}x{height}"),
+                    _ => "overflow".to_string(),
+                };
+
+                write!(
+                    f,
+                    "invalid sprite sheet dimensions: actual {width}x{height}, expected {expected}, frame size {frame_size}"
+                )
+            }
+        }
+    }
+}
+
+impl Error for SpriteError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Image(error) => Some(error),
+            Self::InvalidDimensions { .. } => None,
+        }
     }
 }
 
@@ -47,11 +87,17 @@ impl SpriteSheet {
     pub fn from_image(image: RgbaImage, frame_size: u32) -> Result<Self, SpriteError> {
         let width = image.width();
         let height = image.height();
-        let expected_width = frame_size * EXPECTED_COLUMNS;
-        let expected_height = frame_size * EXPECTED_ROWS;
+        let expected_width = frame_size.checked_mul(EXPECTED_COLUMNS);
+        let expected_height = frame_size.checked_mul(EXPECTED_ROWS);
 
-        if width != expected_width || height != expected_height {
-            return Err(SpriteError::InvalidDimensions { width, height });
+        if frame_size == 0 || Some(width) != expected_width || Some(height) != expected_height {
+            return Err(SpriteError::InvalidDimensions {
+                width,
+                height,
+                expected_width,
+                expected_height,
+                frame_size,
+            });
         }
 
         Ok(Self { image, frame_size })
@@ -79,7 +125,7 @@ impl SpriteSheet {
             SpriteRow::WalkRight => 1,
             SpriteRow::Sleep => 2,
         };
-        let column = (frame_index as u32) % EXPECTED_COLUMNS;
+        let column = (frame_index % EXPECTED_COLUMNS as usize) as u32;
 
         FrameRect {
             x: column * self.frame_size,
@@ -112,6 +158,28 @@ mod tests {
     }
 
     #[test]
+    fn rejects_zero_frame_size() {
+        let err = SpriteSheet::from_image(sheet(0, 0), 0).unwrap_err();
+        assert!(matches!(err, SpriteError::InvalidDimensions { .. }));
+    }
+
+    #[test]
+    fn rejects_frame_size_that_overflows_expected_dimensions() {
+        let err = SpriteSheet::from_image(sheet(1, 1), u32::MAX).unwrap_err();
+        assert!(matches!(err, SpriteError::InvalidDimensions { .. }));
+    }
+
+    #[test]
+    fn invalid_dimensions_display_includes_actual_expected_and_frame_size() {
+        let err = SpriteSheet::from_image(sheet(250, 192), 64).unwrap_err();
+        let message = err.to_string();
+
+        assert!(message.contains("actual 250x192"));
+        assert!(message.contains("expected 256x192"));
+        assert!(message.contains("frame size 64"));
+    }
+
+    #[test]
     fn returns_frame_rect_for_state_row_and_index() {
         let sheet = SpriteSheet::from_image(sheet(256, 192), 64).unwrap();
         let rect = sheet.frame_rect(SpriteRow::WalkRight, 2);
@@ -120,6 +188,22 @@ mod tests {
             FrameRect {
                 x: 128,
                 y: 64,
+                width: 64,
+                height: 64
+            }
+        );
+    }
+
+    #[test]
+    fn frame_rect_wraps_frame_index_at_four_columns() {
+        let sheet = SpriteSheet::from_image(sheet(256, 192), 64).unwrap();
+        let rect = sheet.frame_rect(SpriteRow::Idle, 5);
+
+        assert_eq!(
+            rect,
+            FrameRect {
+                x: 64,
+                y: 0,
                 width: 64,
                 height: 64
             }
