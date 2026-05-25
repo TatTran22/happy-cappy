@@ -155,6 +155,30 @@ pub fn show_pet_context_menu(
                 ns_string!(""),
             )
         };
+        let focus_mode = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                ns_string!("Enable Focus Mode"),
+                Some(crate::command_target_macos::CommandTarget::command_selector()),
+                ns_string!(""),
+            )
+        };
+        let nap = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                ns_string!("Nap"),
+                Some(crate::command_target_macos::CommandTarget::command_selector()),
+                ns_string!(""),
+            )
+        };
+        let cheer_up = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                ns_string!("Cheer Up"),
+                Some(crate::command_target_macos::CommandTarget::command_selector()),
+                ns_string!(""),
+            )
+        };
         let reset = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 NSMenuItem::alloc(mtm),
@@ -165,14 +189,23 @@ pub fn show_pet_context_menu(
         };
         settings.setTag(crate::menu_bar::MENU_TAG_SETTINGS);
         hide.setTag(crate::menu_bar::MENU_TAG_SHOW_HIDE);
+        focus_mode.setTag(crate::menu_bar::MENU_TAG_FOCUS_MODE);
+        nap.setTag(crate::menu_bar::MENU_TAG_NAP);
+        cheer_up.setTag(crate::menu_bar::MENU_TAG_CHEER_UP);
         reset.setTag(crate::menu_bar::MENU_TAG_RESET);
         unsafe {
             settings.setTarget(Some(target_object));
             hide.setTarget(Some(target_object));
+            focus_mode.setTarget(Some(target_object));
+            nap.setTarget(Some(target_object));
+            cheer_up.setTarget(Some(target_object));
             reset.setTarget(Some(target_object));
         }
         menu.addItem(&settings);
         menu.addItem(&hide);
+        menu.addItem(&focus_mode);
+        menu.addItem(&nap);
+        menu.addItem(&cheer_up);
         menu.addItem(&reset);
         let local_position = local_position.unwrap_or(crate::physics::Vec2 { x: 0.0, y: 0.0 });
         let ns_view = match window.window_handle().ok().map(|handle| handle.as_raw()) {

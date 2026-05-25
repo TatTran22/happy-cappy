@@ -533,7 +533,7 @@ impl DesktopPetApp {
 
     fn sync_menu_bar(&self) {
         if let Some(menu_bar) = &self.menu_bar {
-            menu_bar.sync_pet_visibility(self.pet_visible);
+            menu_bar.sync_runtime_state(self.pet_visible, self.settings.focus_mode);
         }
     }
 

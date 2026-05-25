@@ -33,16 +33,16 @@ mod macos {
         app::AppCommand,
         command_target_macos::CommandTarget,
         menu_bar::{
-            MENU_TAG_HOVER_INTENSITY, MENU_TAG_MONITOR_BEHAVIOR, MENU_TAG_MOVEMENT_SPEED,
-            MENU_TAG_PERSONALITY, MENU_TAG_QUIT, MENU_TAG_RESET, MENU_TAG_SCALE,
-            MENU_TAG_SHOW_HIDE,
+            MENU_TAG_FOCUS_MODE, MENU_TAG_HOVER_INTENSITY, MENU_TAG_MONITOR_BEHAVIOR,
+            MENU_TAG_MOVEMENT_SPEED, MENU_TAG_PERSONALITY, MENU_TAG_QUIT, MENU_TAG_RESET,
+            MENU_TAG_SCALE, MENU_TAG_SHOW_HIDE,
         },
         pet::Personality,
         settings::{AppSettings, MonitorBehavior},
     };
 
     const PANEL_WIDTH: f64 = 420.0;
-    const PANEL_HEIGHT: f64 = 330.0;
+    const PANEL_HEIGHT: f64 = 370.0;
     const MARGIN_X: f64 = 24.0;
     const LABEL_WIDTH: f64 = 126.0;
     const CONTROL_X: f64 = 154.0;
@@ -52,6 +52,7 @@ mod macos {
     pub struct SettingsWindowController {
         panel: Retained<NSPanel>,
         show_hide_button: Retained<NSButton>,
+        focus_mode_button: Retained<NSButton>,
         _target: Retained<CommandTarget>,
     }
 
@@ -91,7 +92,7 @@ mod macos {
                 &content_view,
                 mtm,
                 "Scale",
-                158.0,
+                198.0,
                 MENU_TAG_SCALE,
                 settings.scale,
                 AppSettings::MIN_SCALE,
@@ -102,7 +103,7 @@ mod macos {
                 &content_view,
                 mtm,
                 "Movement",
-                116.0,
+                156.0,
                 MENU_TAG_MOVEMENT_SPEED,
                 settings.movement_speed,
                 AppSettings::MIN_MOVEMENT_SPEED,
@@ -113,21 +114,27 @@ mod macos {
                 &content_view,
                 mtm,
                 "Hover",
-                74.0,
+                114.0,
                 MENU_TAG_HOVER_INTENSITY,
                 settings.hover_intensity,
                 AppSettings::MIN_HOVER_INTENSITY,
                 AppSettings::MAX_HOVER_INTENSITY,
                 target_object,
             );
-            let show_hide_button =
-                add_buttons(&content_view, mtm, target_object, settings.pet_visible);
+            let (show_hide_button, focus_mode_button) = add_buttons(
+                &content_view,
+                mtm,
+                target_object,
+                settings.pet_visible,
+                settings.focus_mode,
+            );
 
             panel.center();
 
             Some(Self {
                 panel,
                 show_hide_button,
+                focus_mode_button,
                 _target: target,
             })
         }
@@ -139,12 +146,13 @@ mod macos {
 
         pub fn sync_settings(&self, settings: &AppSettings) {
             set_show_hide_title(&self.show_hide_button, settings.pet_visible);
+            set_focus_mode_title(&self.focus_mode_button, settings.focus_mode);
         }
     }
 
     fn add_title(content_view: &NSView, mtm: MainThreadMarker) {
         let title = NSTextField::labelWithString(ns_string!("Happy Cappy"), mtm);
-        title.setFrame(rect(MARGIN_X, 282.0, PANEL_WIDTH - (MARGIN_X * 2.0), 28.0));
+        title.setFrame(rect(MARGIN_X, 322.0, PANEL_WIDTH - (MARGIN_X * 2.0), 28.0));
         content_view.addSubview(&title);
     }
 
@@ -154,11 +162,11 @@ mod macos {
         target_object: &AnyObject,
         personality: Personality,
     ) {
-        add_label(content_view, mtm, ns_string!("Personality"), 224.0);
+        add_label(content_view, mtm, ns_string!("Personality"), 264.0);
 
         let control = NSSegmentedControl::initWithFrame(
             NSSegmentedControl::alloc(mtm),
-            rect(CONTROL_X, 222.0, CONTROL_WIDTH, ROW_HEIGHT),
+            rect(CONTROL_X, 262.0, CONTROL_WIDTH, ROW_HEIGHT),
         );
         control.setSegmentCount(3);
         control.setLabel_forSegment(ns_string!("Calm"), 0);
@@ -184,11 +192,11 @@ mod macos {
         target_object: &AnyObject,
         monitor_behavior: MonitorBehavior,
     ) {
-        add_label(content_view, mtm, ns_string!("Display"), 190.0);
+        add_label(content_view, mtm, ns_string!("Display"), 230.0);
 
         let control = NSSegmentedControl::initWithFrame(
             NSSegmentedControl::alloc(mtm),
-            rect(CONTROL_X, 188.0, CONTROL_WIDTH, ROW_HEIGHT),
+            rect(CONTROL_X, 228.0, CONTROL_WIDTH, ROW_HEIGHT),
         );
         control.setSegmentCount(2);
         control.setLabel_forSegment(ns_string!("Current Display"), 0);
@@ -246,7 +254,8 @@ mod macos {
         mtm: MainThreadMarker,
         target_object: &AnyObject,
         pet_visible: bool,
-    ) -> Retained<NSButton> {
+        focus_mode: bool,
+    ) -> (Retained<NSButton>, Retained<NSButton>) {
         let quit = unsafe {
             NSButton::buttonWithTitle_target_action(
                 ns_string!("Quit Happy Cappy"),
@@ -271,6 +280,18 @@ mod macos {
         reset.setTag(MENU_TAG_RESET as NSInteger);
         content_view.addSubview(&reset);
 
+        let focus_mode = unsafe {
+            NSButton::buttonWithTitle_target_action(
+                focus_mode_title(focus_mode),
+                Some(target_object),
+                Some(CommandTarget::command_selector()),
+                mtm,
+            )
+        };
+        focus_mode.setFrame(rect(168.0, 64.0, 112.0, 30.0));
+        focus_mode.setTag(MENU_TAG_FOCUS_MODE as NSInteger);
+        content_view.addSubview(&focus_mode);
+
         let show_hide = unsafe {
             NSButton::buttonWithTitle_target_action(
                 show_hide_title(pet_visible),
@@ -282,7 +303,7 @@ mod macos {
         show_hide.setFrame(rect(292.0, 28.0, 108.0, 30.0));
         show_hide.setTag(MENU_TAG_SHOW_HIDE as NSInteger);
         content_view.addSubview(&show_hide);
-        show_hide
+        (show_hide, focus_mode)
     }
 
     fn set_show_hide_title(button: &NSButton, pet_visible: bool) {
@@ -294,6 +315,18 @@ mod macos {
             ns_string!("Hide Pet")
         } else {
             ns_string!("Show Pet")
+        }
+    }
+
+    fn set_focus_mode_title(button: &NSButton, focus_mode: bool) {
+        button.setTitle(focus_mode_title(focus_mode));
+    }
+
+    fn focus_mode_title(focus_mode: bool) -> &'static NSString {
+        if focus_mode {
+            ns_string!("Disable Focus")
+        } else {
+            ns_string!("Enable Focus")
         }
     }
 

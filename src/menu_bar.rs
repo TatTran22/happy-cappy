@@ -37,7 +37,7 @@ impl MenuBarController {
         None
     }
 
-    pub fn sync_pet_visibility(&self, _pet_visible: bool) {}
+    pub fn sync_runtime_state(&self, _pet_visible: bool, _focus_mode: bool) {}
 }
 
 #[cfg(target_os = "macos")]
@@ -45,6 +45,7 @@ pub struct MenuBarController {
     _status_item: objc2::rc::Retained<objc2_app_kit::NSStatusItem>,
     _menu: objc2::rc::Retained<objc2_app_kit::NSMenu>,
     show_hide_item: objc2::rc::Retained<objc2_app_kit::NSMenuItem>,
+    focus_mode_item: objc2::rc::Retained<objc2_app_kit::NSMenuItem>,
     _target: objc2::rc::Retained<crate::command_target_macos::CommandTarget>,
 }
 
@@ -73,7 +74,31 @@ impl MenuBarController {
         let show_hide_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 NSMenuItem::alloc(mtm),
-                show_hide_title(true),
+                show_hide_ns_title(true),
+                None,
+                ns_string!(""),
+            )
+        };
+        let focus_mode_item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                focus_mode_ns_title(false),
+                None,
+                ns_string!(""),
+            )
+        };
+        let nap_item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                ns_string!("Nap"),
+                None,
+                ns_string!(""),
+            )
+        };
+        let cheer_up_item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                ns_string!("Cheer Up"),
                 None,
                 ns_string!(""),
             )
@@ -97,12 +122,23 @@ impl MenuBarController {
 
         settings_item.setTag(MENU_TAG_SETTINGS);
         show_hide_item.setTag(MENU_TAG_SHOW_HIDE);
+        focus_mode_item.setTag(MENU_TAG_FOCUS_MODE);
+        nap_item.setTag(MENU_TAG_NAP);
+        cheer_up_item.setTag(MENU_TAG_CHEER_UP);
         reset_item.setTag(MENU_TAG_RESET);
         quit_item.setTag(MENU_TAG_QUIT);
 
         let target = crate::command_target_macos::CommandTarget::new(mtm, proxy);
         let target_object: &AnyObject = target.as_ref();
-        for item in [&settings_item, &show_hide_item, &reset_item, &quit_item] {
+        for item in [
+            &settings_item,
+            &show_hide_item,
+            &focus_mode_item,
+            &nap_item,
+            &cheer_up_item,
+            &reset_item,
+            &quit_item,
+        ] {
             unsafe {
                 item.setTarget(Some(target_object));
                 item.setAction(Some(
@@ -113,6 +149,9 @@ impl MenuBarController {
 
         menu.addItem(&settings_item);
         menu.addItem(&show_hide_item);
+        menu.addItem(&focus_mode_item);
+        menu.addItem(&nap_item);
+        menu.addItem(&cheer_up_item);
         menu.addItem(&reset_item);
         menu.addItem(&quit_item);
         status_item.setMenu(Some(&menu));
@@ -121,23 +160,46 @@ impl MenuBarController {
             _status_item: status_item,
             _menu: menu,
             show_hide_item,
+            focus_mode_item,
             _target: target,
         })
     }
 
-    pub fn sync_pet_visibility(&self, pet_visible: bool) {
-        self.show_hide_item.setTitle(show_hide_title(pet_visible));
+    pub fn sync_runtime_state(&self, pet_visible: bool, focus_mode: bool) {
+        self.show_hide_item
+            .setTitle(show_hide_ns_title(pet_visible));
+        self.focus_mode_item
+            .setTitle(focus_mode_ns_title(focus_mode));
     }
 }
 
 #[cfg(target_os = "macos")]
-fn show_hide_title(pet_visible: bool) -> &'static objc2_foundation::NSString {
+fn show_hide_ns_title(pet_visible: bool) -> &'static objc2_foundation::NSString {
     use objc2_foundation::ns_string;
 
     if pet_visible {
         ns_string!("Hide Pet")
     } else {
         ns_string!("Show Pet")
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn focus_mode_ns_title(focus_mode: bool) -> &'static objc2_foundation::NSString {
+    use objc2_foundation::ns_string;
+
+    if focus_mode {
+        ns_string!("Disable Focus Mode")
+    } else {
+        ns_string!("Enable Focus Mode")
+    }
+}
+
+pub fn focus_mode_title(focus_mode: bool) -> &'static str {
+    if focus_mode {
+        "Disable Focus Mode"
+    } else {
+        "Enable Focus Mode"
     }
 }
 
@@ -171,5 +233,11 @@ mod tests {
         );
         assert_eq!(command_from_tag(MENU_TAG_QUIT), Some(AppCommand::Quit));
         assert_eq!(command_from_tag(999), None);
+    }
+
+    #[test]
+    fn focus_mode_titles_match_runtime_state() {
+        assert_eq!(focus_mode_title(false), "Enable Focus Mode");
+        assert_eq!(focus_mode_title(true), "Disable Focus Mode");
     }
 }
