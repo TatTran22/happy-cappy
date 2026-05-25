@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR="$ROOT_DIR/dist/Happy Cappy.app"
+LEGACY_APP_DIR="$ROOT_DIR/dist/DesktopPet.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
@@ -16,7 +17,7 @@ fi
 
 cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --release
 
-rm -rf "$APP_DIR"
+rm -rf "$APP_DIR" "$LEGACY_APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
 cp "$ROOT_DIR/target/release/happy-cappy" "$MACOS_DIR/happy-cappy"
