@@ -30,12 +30,15 @@ impl MenuBarController {
     pub fn new(_proxy: winit::event_loop::EventLoopProxy<AppCommand>) -> Option<Self> {
         None
     }
+
+    pub fn sync_pet_visibility(&self, _pet_visible: bool) {}
 }
 
 #[cfg(target_os = "macos")]
 pub struct MenuBarController {
     _status_item: objc2::rc::Retained<objc2_app_kit::NSStatusItem>,
     _menu: objc2::rc::Retained<objc2_app_kit::NSMenu>,
+    show_hide_item: objc2::rc::Retained<objc2_app_kit::NSMenuItem>,
     _target: objc2::rc::Retained<crate::command_target_macos::CommandTarget>,
 }
 
@@ -64,7 +67,7 @@ impl MenuBarController {
         let show_hide_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 NSMenuItem::alloc(mtm),
-                ns_string!("Show/Hide Pet"),
+                show_hide_title(true),
                 None,
                 ns_string!(""),
             )
@@ -111,8 +114,24 @@ impl MenuBarController {
         Some(Self {
             _status_item: status_item,
             _menu: menu,
+            show_hide_item,
             _target: target,
         })
+    }
+
+    pub fn sync_pet_visibility(&self, pet_visible: bool) {
+        self.show_hide_item.setTitle(show_hide_title(pet_visible));
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn show_hide_title(pet_visible: bool) -> &'static objc2_foundation::NSString {
+    use objc2_foundation::ns_string;
+
+    if pet_visible {
+        ns_string!("Hide Pet")
+    } else {
+        ns_string!("Show Pet")
     }
 }
 

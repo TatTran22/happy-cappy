@@ -14,20 +14,29 @@ pub enum MonitorBehavior {
     PrimaryDisplay,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoredPosition {
     pub x: f32,
     pub y: f32,
+    #[serde(default)]
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppSettings {
+    #[serde(default = "default_personality")]
     pub personality: Personality,
+    #[serde(default = "default_scale")]
     pub scale: f32,
+    #[serde(default = "default_movement_speed")]
     pub movement_speed: f32,
+    #[serde(default = "default_hover_intensity")]
     pub hover_intensity: f32,
+    #[serde(default = "default_monitor_behavior")]
     pub monitor_behavior: MonitorBehavior,
+    #[serde(default = "default_pet_visible")]
     pub pet_visible: bool,
+    #[serde(default)]
     pub last_position: Option<StoredPosition>,
 }
 
@@ -134,18 +143,60 @@ impl AppSettings {
     }
 
     pub fn update_position(&mut self, position: Vec2) {
+        self.update_position_for_display(position, None);
+    }
+
+    pub fn update_position_for_display(&mut self, position: Vec2, display_name: Option<&str>) {
         self.last_position = Some(StoredPosition {
             x: position.x,
             y: position.y,
+            display_name: display_name.map(str::to_owned),
         });
     }
 
     pub fn restored_position(&self) -> Option<Vec2> {
-        self.last_position.map(|position| Vec2 {
+        self.restored_position_for_display(None)
+    }
+
+    pub fn restored_position_for_display(&self, display_name: Option<&str>) -> Option<Vec2> {
+        let position = self.last_position.as_ref()?;
+        if let (Some(stored_display), Some(active_display)) =
+            (position.display_name.as_deref(), display_name)
+        {
+            if stored_display != active_display {
+                return None;
+            }
+        }
+
+        self.last_position.as_ref().map(|position| Vec2 {
             x: position.x,
             y: position.y,
         })
     }
+}
+
+fn default_personality() -> Personality {
+    Personality::Cheerful
+}
+
+fn default_scale() -> f32 {
+    2.0
+}
+
+fn default_movement_speed() -> f32 {
+    1.0
+}
+
+fn default_hover_intensity() -> f32 {
+    1.0
+}
+
+fn default_monitor_behavior() -> MonitorBehavior {
+    MonitorBehavior::CurrentDisplay
+}
+
+fn default_pet_visible() -> bool {
+    true
 }
 
 pub fn default_settings_path() -> Result<PathBuf, SettingsError> {
@@ -202,7 +253,11 @@ mod tests {
     #[test]
     fn sanitize_clamps_saved_position_inside_bounds() {
         let mut settings = AppSettings {
-            last_position: Some(StoredPosition { x: 999.0, y: -50.0 }),
+            last_position: Some(StoredPosition {
+                x: 999.0,
+                y: -50.0,
+                display_name: None,
+            }),
             ..AppSettings::default()
         };
 
@@ -210,7 +265,11 @@ mod tests {
 
         assert_eq!(
             settings.last_position,
-            Some(StoredPosition { x: 372.0, y: 0.0 })
+            Some(StoredPosition {
+                x: 372.0,
+                y: 0.0,
+                display_name: None,
+            })
         );
     }
 
@@ -244,7 +303,11 @@ mod tests {
             hover_intensity: 2.5,
             monitor_behavior: MonitorBehavior::PrimaryDisplay,
             pet_visible: false,
-            last_position: Some(StoredPosition { x: 22.0, y: 33.0 }),
+            last_position: Some(StoredPosition {
+                x: 22.0,
+                y: 33.0,
+                display_name: Some("Built-in Display".to_string()),
+            }),
         };
 
         settings.save_to(&path).unwrap();
@@ -254,6 +317,61 @@ mod tests {
         assert_eq!(loaded, settings);
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn partial_settings_load_with_defaults_for_missing_fields() {
+        let root = std::env::temp_dir().join(format!("happy-cappy-partial-{}", fastrand::u64(..)));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("settings.json");
+        fs::write(
+            &path,
+            br#"{"personality":"calm","scale":3.0,"last_position":{"x":44.0,"y":55.0}}"#,
+        )
+        .unwrap();
+
+        let loaded =
+            AppSettings::load_or_default_from(&path, bounds(), Vec2 { x: 128.0, y: 128.0 });
+
+        assert_eq!(loaded.personality, Personality::Calm);
+        assert_eq!(loaded.scale, 3.0);
+        assert_eq!(loaded.movement_speed, AppSettings::default().movement_speed);
+        assert_eq!(
+            loaded.monitor_behavior,
+            AppSettings::default().monitor_behavior
+        );
+        assert!(loaded.pet_visible);
+        assert_eq!(
+            loaded.last_position,
+            Some(StoredPosition {
+                x: 44.0,
+                y: 55.0,
+                display_name: None,
+            })
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn restored_position_ignores_mismatched_display_identity() {
+        let settings = AppSettings {
+            last_position: Some(StoredPosition {
+                x: 22.0,
+                y: 33.0,
+                display_name: Some("External Display".to_string()),
+            }),
+            ..AppSettings::default()
+        };
+
+        assert_eq!(
+            settings.restored_position_for_display(Some("External Display")),
+            Some(Vec2 { x: 22.0, y: 33.0 })
+        );
+        assert_eq!(
+            settings.restored_position_for_display(Some("Built-in Display")),
+            None
+        );
     }
 
     #[test]

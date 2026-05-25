@@ -63,6 +63,7 @@ pub struct DesktopPetApp {
     settings_window: Option<SettingsWindowController>,
     settings: AppSettings,
     settings_path: Option<std::path::PathBuf>,
+    active_monitor_name: Option<String>,
     pet_visible: bool,
     interaction: InteractionState,
     last_cursor_local_position: Option<Vec2>,
@@ -90,6 +91,7 @@ impl DesktopPetApp {
             settings_window: None,
             settings: AppSettings::default(),
             settings_path: default_settings_path().ok(),
+            active_monitor_name: None,
             pet_visible: true,
             interaction: InteractionState::default(),
             last_cursor_local_position: None,
@@ -118,6 +120,7 @@ impl DesktopPetApp {
             settings_window: None,
             settings: AppSettings::default(),
             settings_path: default_settings_path().ok(),
+            active_monitor_name: None,
             pet_visible: true,
             interaction: InteractionState::default(),
             last_cursor_local_position: None,
@@ -148,8 +151,10 @@ impl DesktopPetApp {
         }
 
         self.window = Some(Arc::clone(&window));
+        let settings = self.read_settings();
+        self.settings.monitor_behavior = settings.monitor_behavior;
         self.update_bounds_from_window(event_loop);
-        self.load_settings();
+        self.apply_settings(settings);
         if !self.pet_visible {
             window.set_visible(false);
         }
@@ -207,13 +212,18 @@ impl DesktopPetApp {
     }
 
     fn update_bounds_from_window(&mut self, event_loop: &ActiveEventLoop) {
-        let monitor = self
+        let current_monitor = self
             .window
             .as_ref()
-            .and_then(|window| window.current_monitor())
-            .or_else(|| event_loop.primary_monitor());
+            .and_then(|window| window.current_monitor());
+        let primary_monitor = event_loop.primary_monitor();
+        let monitor = match self.settings.monitor_behavior {
+            crate::settings::MonitorBehavior::CurrentDisplay => current_monitor.or(primary_monitor),
+            crate::settings::MonitorBehavior::PrimaryDisplay => primary_monitor.or(current_monitor),
+        };
 
         if let Some(monitor) = monitor {
+            self.active_monitor_name = monitor.name();
             let position = monitor.position();
             let size = monitor.size();
             let scale_factor = self
@@ -227,6 +237,8 @@ impl DesktopPetApp {
                 max_x: (position.x as f32 + size.width as f32) / scale_factor,
                 max_y: (position.y as f32 + size.height as f32) / scale_factor,
             };
+        } else {
+            self.active_monitor_name = None;
         }
 
         self.physics.clamp_to_bounds();
@@ -285,12 +297,17 @@ impl DesktopPetApp {
         };
 
         let had_restored_position = settings.last_position.is_some();
-        if let Some(position) = settings.restored_position() {
+        if let Some(position) =
+            settings.restored_position_for_display(self.active_monitor_name.as_deref())
+        {
             self.physics.position = position;
         }
         self.physics.clamp_to_bounds();
         if had_restored_position {
-            settings.update_position(self.physics.position);
+            settings.update_position_for_display(
+                self.physics.position,
+                self.active_monitor_name.as_deref(),
+            );
         }
 
         self.settings = settings;
@@ -299,6 +316,7 @@ impl DesktopPetApp {
             let _ = window.request_inner_size(size);
         }
         self.sync_settings_window();
+        self.sync_menu_bar();
         self.move_window_to_pet();
     }
 
@@ -313,11 +331,11 @@ impl DesktopPetApp {
         }
     }
 
-    fn load_settings(&mut self) {
+    fn read_settings(&self) -> AppSettings {
         let Some(path) = &self.settings_path else {
-            return;
+            return AppSettings::default();
         };
-        let settings = match AppSettings::load_from(path) {
+        match AppSettings::load_from(path) {
             Ok(settings) => settings,
             Err(error) => {
                 if !matches!(
@@ -329,8 +347,7 @@ impl DesktopPetApp {
                 }
                 AppSettings::default()
             }
-        };
-        self.apply_settings(settings);
+        }
     }
 
     #[allow(dead_code)]
@@ -348,6 +365,7 @@ impl DesktopPetApp {
             self.next_tick_at = Instant::now();
         }
         self.sync_settings_window();
+        self.sync_menu_bar();
         self.save_settings();
     }
 
@@ -358,7 +376,10 @@ impl DesktopPetApp {
             y: self.physics.bounds.min_y + 120.0,
         };
         self.physics.clamp_to_bounds();
-        self.settings.update_position(self.physics.position);
+        self.settings.update_position_for_display(
+            self.physics.position,
+            self.active_monitor_name.as_deref(),
+        );
         self.move_window_to_pet();
         self.save_settings();
     }
@@ -398,10 +419,7 @@ impl DesktopPetApp {
                 self.save_settings();
             }
             AppCommand::SetMonitorBehavior(monitor_behavior) => {
-                let mut settings = self.settings.clone();
-                settings.monitor_behavior = monitor_behavior;
-                self.apply_settings(settings);
-                self.save_settings();
+                self.set_monitor_behavior(monitor_behavior, None);
             }
             AppCommand::Quit => return false,
         }
@@ -409,9 +427,31 @@ impl DesktopPetApp {
     }
 
     fn handle_command(&mut self, command: AppCommand, event_loop: &ActiveEventLoop) {
-        if !self.handle_non_quit_command(command) {
-            event_loop.exit();
+        match command {
+            AppCommand::Quit => event_loop.exit(),
+            AppCommand::SetMonitorBehavior(monitor_behavior) => {
+                self.set_monitor_behavior(monitor_behavior, Some(event_loop));
+            }
+            _ => {
+                self.handle_non_quit_command(command);
+            }
         }
+    }
+
+    fn set_monitor_behavior(
+        &mut self,
+        monitor_behavior: crate::settings::MonitorBehavior,
+        event_loop: Option<&ActiveEventLoop>,
+    ) {
+        let mut settings = self.settings.clone();
+        settings.monitor_behavior = monitor_behavior;
+        self.settings.monitor_behavior = monitor_behavior;
+        if let Some(event_loop) = event_loop {
+            self.update_bounds_from_window(event_loop);
+        }
+        settings.sanitize(self.physics.bounds, self.physics.size);
+        self.apply_settings(settings);
+        self.save_settings();
     }
 
     fn open_settings_window(&mut self) {
@@ -441,6 +481,12 @@ impl DesktopPetApp {
     fn sync_settings_window(&self) {
         if let Some(settings_window) = &self.settings_window {
             settings_window.sync_settings(&self.settings);
+        }
+    }
+
+    fn sync_menu_bar(&self) {
+        if let Some(menu_bar) = &self.menu_bar {
+            menu_bar.sync_pet_visibility(self.pet_visible);
         }
     }
 
@@ -474,7 +520,10 @@ impl DesktopPetApp {
 
     #[allow(dead_code)]
     fn persist_current_position(&mut self) {
-        self.settings.update_position(self.physics.position);
+        self.settings.update_position_for_display(
+            self.physics.position,
+            self.active_monitor_name.as_deref(),
+        );
         self.save_settings();
     }
 
@@ -687,6 +736,7 @@ impl ApplicationHandler<AppCommand> for DesktopPetApp {
                 self.menu_bar = MenuBarController::new(event_proxy.clone());
             }
         }
+        self.sync_menu_bar();
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AppCommand) {
@@ -851,7 +901,11 @@ mod tests {
         };
         let settings = crate::settings::AppSettings {
             scale: 3.0,
-            last_position: Some(crate::settings::StoredPosition { x: 200.0, y: 220.0 }),
+            last_position: Some(crate::settings::StoredPosition {
+                x: 200.0,
+                y: 220.0,
+                display_name: None,
+            }),
             ..crate::settings::AppSettings::default()
         };
 
@@ -861,7 +915,11 @@ mod tests {
         assert_eq!(app.physics.position, Vec2 { x: 58.0, y: 58.0 });
         assert_eq!(
             app.settings_for_test().last_position,
-            Some(crate::settings::StoredPosition { x: 58.0, y: 58.0 })
+            Some(crate::settings::StoredPosition {
+                x: 58.0,
+                y: 58.0,
+                display_name: None,
+            })
         );
     }
 
@@ -886,6 +944,32 @@ mod tests {
         assert_eq!(app.physics.size, Vec2 { x: 192.0, y: 192.0 });
         assert_eq!(app.physics.position, Vec2 { x: 108.0, y: 108.0 });
         assert_eq!(app.settings_for_test().last_position, None);
+    }
+
+    #[test]
+    fn applying_settings_skips_position_from_different_display() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.active_monitor_name = Some("Built-in Display".to_string());
+        let settings = crate::settings::AppSettings {
+            last_position: Some(crate::settings::StoredPosition {
+                x: 300.0,
+                y: 300.0,
+                display_name: Some("External Display".to_string()),
+            }),
+            ..crate::settings::AppSettings::default()
+        };
+
+        app.apply_settings_for_test(settings);
+
+        assert_eq!(app.physics.position, Vec2 { x: 120.0, y: 120.0 });
+        assert_eq!(
+            app.settings_for_test().last_position,
+            Some(crate::settings::StoredPosition {
+                x: 120.0,
+                y: 120.0,
+                display_name: Some("Built-in Display".to_string()),
+            })
+        );
     }
 
     #[test]
@@ -920,6 +1004,23 @@ mod tests {
                 x: FRAME_SIZE as f32 * AppSettings::MAX_SCALE,
                 y: FRAME_SIZE as f32 * AppSettings::MAX_SCALE,
             }
+        );
+    }
+
+    #[test]
+    fn non_quit_command_updates_monitor_behavior_setting() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.settings_path = None;
+
+        assert!(
+            app.handle_non_quit_command_for_test(AppCommand::SetMonitorBehavior(
+                crate::settings::MonitorBehavior::PrimaryDisplay
+            ),)
+        );
+
+        assert_eq!(
+            app.settings_for_test().monitor_behavior,
+            crate::settings::MonitorBehavior::PrimaryDisplay
         );
     }
 
@@ -980,7 +1081,11 @@ mod tests {
         assert_eq!(app.last_cursor_screen_position, None);
         assert_eq!(
             app.settings.last_position,
-            Some(crate::settings::StoredPosition { x: 120.0, y: 90.0 })
+            Some(crate::settings::StoredPosition {
+                x: 120.0,
+                y: 90.0,
+                display_name: None,
+            })
         );
     }
 }

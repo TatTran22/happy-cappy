@@ -34,7 +34,8 @@ mod macos {
         command_target_macos::CommandTarget,
         menu_bar::{
             MENU_TAG_HOVER_INTENSITY, MENU_TAG_MONITOR_BEHAVIOR, MENU_TAG_MOVEMENT_SPEED,
-            MENU_TAG_PERSONALITY, MENU_TAG_RESET, MENU_TAG_SCALE, MENU_TAG_SHOW_HIDE,
+            MENU_TAG_PERSONALITY, MENU_TAG_QUIT, MENU_TAG_RESET, MENU_TAG_SCALE,
+            MENU_TAG_SHOW_HIDE,
         },
         pet::Personality,
         settings::{AppSettings, MonitorBehavior},
@@ -246,6 +247,18 @@ mod macos {
         target_object: &AnyObject,
         pet_visible: bool,
     ) -> Retained<NSButton> {
+        let quit = unsafe {
+            NSButton::buttonWithTitle_target_action(
+                ns_string!("Quit Happy Cappy"),
+                Some(target_object),
+                Some(CommandTarget::command_selector()),
+                mtm,
+            )
+        };
+        quit.setFrame(rect(MARGIN_X, 28.0, 132.0, 30.0));
+        quit.setTag(MENU_TAG_QUIT as NSInteger);
+        content_view.addSubview(&quit);
+
         let reset = unsafe {
             NSButton::buttonWithTitle_target_action(
                 ns_string!("Reset Position"),
@@ -254,7 +267,7 @@ mod macos {
                 mtm,
             )
         };
-        reset.setFrame(rect(CONTROL_X, 28.0, 112.0, 30.0));
+        reset.setFrame(rect(168.0, 28.0, 112.0, 30.0));
         reset.setTag(MENU_TAG_RESET as NSInteger);
         content_view.addSubview(&reset);
 
@@ -266,7 +279,7 @@ mod macos {
                 mtm,
             )
         };
-        show_hide.setFrame(rect(CONTROL_X + 124.0, 28.0, 108.0, 30.0));
+        show_hide.setFrame(rect(292.0, 28.0, 108.0, 30.0));
         show_hide.setTag(MENU_TAG_SHOW_HIDE as NSInteger);
         content_view.addSubview(&show_hide);
         show_hide
