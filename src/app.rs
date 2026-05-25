@@ -20,6 +20,7 @@ use crate::{
     physics::{Bounds, Physics, Vec2},
     renderer::PetRenderer,
     settings::{default_settings_path, AppSettings, SettingsError},
+    settings_window_macos::SettingsWindowController,
     sprite::{SpriteRow, SpriteSheet},
     window_macos::apply_desktop_pet_window_behavior,
 };
@@ -59,6 +60,7 @@ pub struct DesktopPetApp {
     last_tick: Instant,
     next_tick_at: Instant,
     menu_bar: Option<MenuBarController>,
+    settings_window: Option<SettingsWindowController>,
     settings: AppSettings,
     settings_path: Option<std::path::PathBuf>,
     pet_visible: bool,
@@ -85,6 +87,7 @@ impl DesktopPetApp {
             last_tick: now,
             next_tick_at: now,
             menu_bar: None,
+            settings_window: None,
             settings: AppSettings::default(),
             settings_path: default_settings_path().ok(),
             pet_visible: true,
@@ -112,6 +115,7 @@ impl DesktopPetApp {
             last_tick: now,
             next_tick_at: now,
             menu_bar: None,
+            settings_window: None,
             settings: AppSettings::default(),
             settings_path: default_settings_path().ok(),
             pet_visible: true,
@@ -351,7 +355,7 @@ impl DesktopPetApp {
         self.save_settings();
     }
 
-    fn handle_command(&mut self, command: AppCommand, event_loop: &ActiveEventLoop) {
+    fn handle_non_quit_command(&mut self, command: AppCommand) -> bool {
         match command {
             AppCommand::OpenSettings => self.open_settings_window(),
             AppCommand::ShowPet => self.set_pet_visible(true),
@@ -391,12 +395,38 @@ impl DesktopPetApp {
                 self.apply_settings(settings);
                 self.save_settings();
             }
-            AppCommand::Quit => event_loop.exit(),
+            AppCommand::Quit => return false,
+        }
+        true
+    }
+
+    fn handle_command(&mut self, command: AppCommand, event_loop: &ActiveEventLoop) {
+        if !self.handle_non_quit_command(command) {
+            event_loop.exit();
         }
     }
 
     fn open_settings_window(&mut self) {
-        warn!("settings window is not available yet");
+        if self.settings_window.is_none() {
+            #[cfg(not(test))]
+            {
+                self.settings_window =
+                    SettingsWindowController::new(&self.settings, self.event_proxy.clone());
+            }
+
+            #[cfg(test)]
+            {
+                self.settings_window = self.event_proxy.as_ref().and_then(|event_proxy| {
+                    SettingsWindowController::new(&self.settings, event_proxy.clone())
+                });
+            }
+        }
+
+        if let Some(settings_window) = &self.settings_window {
+            settings_window.show();
+        } else {
+            warn!("settings window is not available on this platform or thread");
+        }
     }
 
     fn show_context_menu(&self, local_position: Option<Vec2>) {
@@ -597,6 +627,10 @@ impl DesktopPetApp {
     fn apply_settings_for_test(&mut self, settings: crate::settings::AppSettings) {
         self.apply_settings(settings);
     }
+
+    fn handle_non_quit_command_for_test(&mut self, command: AppCommand) -> bool {
+        self.handle_non_quit_command(command)
+    }
 }
 
 impl ApplicationHandler<AppCommand> for DesktopPetApp {
@@ -791,6 +825,41 @@ mod tests {
         assert_eq!(app.physics.size, Vec2 { x: 192.0, y: 192.0 });
         assert_eq!(app.physics.position, Vec2 { x: 108.0, y: 108.0 });
         assert_eq!(app.settings_for_test().last_position, None);
+    }
+
+    #[test]
+    fn non_quit_command_sets_personality_through_runtime_settings_path() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.settings_path = None;
+
+        assert!(
+            app.handle_non_quit_command_for_test(AppCommand::SetPersonality(
+                crate::pet::Personality::Calm,
+            ))
+        );
+
+        assert_eq!(
+            app.settings_for_test().personality,
+            crate::pet::Personality::Calm
+        );
+        assert_eq!(app.pet.personality(), crate::pet::Personality::Calm);
+    }
+
+    #[test]
+    fn non_quit_command_clamps_scale_through_runtime_settings_path() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.settings_path = None;
+
+        assert!(app.handle_non_quit_command_for_test(AppCommand::SetScale(99.0)));
+
+        assert_eq!(app.settings_for_test().scale, AppSettings::MAX_SCALE);
+        assert_eq!(
+            app.physics.size,
+            Vec2 {
+                x: FRAME_SIZE as f32 * AppSettings::MAX_SCALE,
+                y: FRAME_SIZE as f32 * AppSettings::MAX_SCALE,
+            }
+        );
     }
 
     #[test]
