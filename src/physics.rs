@@ -28,10 +28,10 @@ impl Physics {
         let max_position = self.effective_max_position();
         let stopped_x = max_position.x == self.bounds.min_x;
         let stopped_y = max_position.y == self.bounds.min_y;
-        let hit_x = !stopped_x
-            && (self.position.x < self.bounds.min_x || self.position.x > max_position.x);
-        let hit_y = !stopped_y
-            && (self.position.y < self.bounds.min_y || self.position.y > max_position.y);
+        let hit_x =
+            !stopped_x && (self.position.x < self.bounds.min_x || self.position.x > max_position.x);
+        let hit_y =
+            !stopped_y && (self.position.y < self.bounds.min_y || self.position.y > max_position.y);
 
         self.clamp_to_bounds_with(max_position);
 
@@ -59,14 +59,8 @@ impl Physics {
     }
 
     fn clamp_to_bounds_with(&mut self, max_position: Vec2) {
-        self.position.x = self
-            .position
-            .x
-            .clamp(self.bounds.min_x, max_position.x);
-        self.position.y = self
-            .position
-            .y
-            .clamp(self.bounds.min_y, max_position.y);
+        self.position.x = self.position.x.clamp(self.bounds.min_x, max_position.x);
+        self.position.y = self.position.y.clamp(self.bounds.min_y, max_position.y);
     }
 }
 
