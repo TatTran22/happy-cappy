@@ -20,6 +20,27 @@ Each behavior is independently toggleable in Settings; defaults are all on.
 - Real-time per-frame cursor steering. The pet stays calm; intent is re-evaluated at walk-cycle boundaries (~every 1–2 s).
 - Cross-platform parity. Workspace observation is macOS-only; other platforms get a no-op stub that produces an empty snapshot.
 - Surfacing the new toggles in the menu bar. They are set-and-forget preferences and live in the Settings panel only.
+- Vertical pet motion. The pet stays horizontal-only (`PetTick.speed_x` only, matching today's model). 2D inputs are projected to a horizontal direction before being applied. Adding vertical motion would touch sprite animation, walk states, and physics y-velocity — out of scope for this spec.
+
+## Coordinate system
+
+The app's pet and physics work in **winit logical points, top-left origin** — see `app.rs:239-244`, where `physics.bounds` is computed by dividing physical monitor coords by `window.scale_factor()`. `physics.position`, `physics.size`, and `physics.bounds` are all in that space. The pet's window position is set via `LogicalPosition` (`app.rs:271-277`).
+
+All workspace observations are normalized into this space **inside `workspace.rs`** before they appear in `WorkspaceSnapshot`. The observer is the only place that talks to macOS coordinate conventions; downstream code (`decide_intent`, pet, window) only sees pet-space coords.
+
+Normalization contract per signal:
+
+| Source | Native space | Conversion to pet space |
+|---|---|---|
+| `NSEvent.mouseLocation` | Cocoa screen, bottom-left origin, points | `logical_y = total_display_y_span - cocoa_y`; x unchanged |
+| `CGWindowListCopyWindowInfo` bounds | Quartz, top-left origin, points | No flip needed; bounds already in points |
+| `AXValue` rect from `kAXBoundsForRangeParameterizedAttribute` | Quartz, top-left origin, points | No flip needed |
+| `NSScreen` frame (for fullscreen comparison) | Cocoa, bottom-left, points | Convert to Quartz top-left so it matches `CGWindowList` bounds |
+| `winit::Monitor::size()` (physical pixels) | Top-left, physical | Divide by `scale_factor` to get logical points |
+
+The active display for all per-display logic is the one the pet currently sits on, identified by `active_monitor_name` (already tracked in `DesktopPetApp`). The observer is told which display the pet is on via a `fn set_active_display(&mut self, name: Option<String>)` setter the app calls whenever it updates `active_monitor_name`. Multi-display correctness flows from "all comparisons happen in the active display's logical-point space".
+
+For the fullscreen check specifically: a window from `CGWindowListCopyWindowInfo` is "fullscreen on the pet's display" iff its bounds equal the active display's logical bounds within 1 px on each side. Both sides are in points, top-left origin, no per-display origin adjustment needed because we compare against the active display's own `NSScreen.frame` converted to Quartz.
 
 ## Signals and how they're observed
 
@@ -44,9 +65,9 @@ pub struct WorkspaceSnapshot {
     pub typing_rate_per_sec: f32,
     pub frontmost_bundle_id: Option<String>,
     pub frontmost_is_editor: bool,
-    pub caret_rect: Option<Rect>,         // global screen coords
-    pub fullscreen_active: bool,          // on the pet's display only
-    pub cursor_pos: Vec2,                 // global screen coords
+    pub caret_rect: Option<Rect>,         // pet-space points, top-left origin (per §Coordinate system)
+    pub fullscreen_active: bool,          // on the pet's active display only
+    pub cursor_pos: Vec2,                 // pet-space points, top-left origin
 }
 
 impl WorkspaceSnapshot {
@@ -80,6 +101,9 @@ com.jetbrains.*                  // matched by prefix
 
 ### Module layout
 
+- `src/physics.rs` (extended):
+  - New `Rect { min: Vec2, max: Vec2 }` type alongside the existing `Vec2` and `Bounds`, used by `WorkspaceSnapshot.caret_rect` and `BehaviorIntent::AvoidRect`. Single canonical geometry type rather than re-inventing per module.
+
 - `src/workspace.rs` (~250 lines, new):
   - `WorkspaceObserver` — owns last-known counter values, last-poll timestamps per source, AX permission state, cached editor-bundle-id list.
   - `fn tick(&mut self, now: Instant) -> &WorkspaceSnapshot` — polls all sources at their respective cadences, updates the snapshot, returns a reference. Called from the app's main loop.
@@ -87,14 +111,25 @@ com.jetbrains.*                  // matched by prefix
   - macOS-specific calls are behind `#[cfg(target_os = "macos")]`; other platforms get a stub `WorkspaceObserver` whose `tick` returns a default snapshot (idle = 0, no fullscreen, no caret, busy = false).
 
 - `src/pet.rs` (extended):
-  - New `BehaviorIntent` enum: `Idle | ChaseCursor { target: Vec2 } | AvoidCursor { from: Vec2 } | AvoidRect { rect: Rect }`.
+  - New `BehaviorIntent` enum: `Idle | ChaseCursor { target_x: f32 } | AvoidCursor { from_x: f32 } | AvoidRect { rect: Rect }`.
+  - **Motion is horizontal-only in v1.** This matches the existing model: `PetTick.speed_x` only (pet.rs:55), and `app.rs:262` only writes `physics.velocity.x`. `PetTick.speed_y` and any vertical pet motion are out of scope for this spec.
+  - 2D inputs from the snapshot (cursor position, caret rect) are projected to 1D inside `decide_intent` before being placed into the intent:
+    - **ChaseCursor:** `target_x = snapshot.cursor_pos.x`. The pet ambles in the cursor's general horizontal direction.
+    - **AvoidCursor:** `from_x = snapshot.cursor_pos.x`. The pet ambles horizontally away.
+    - **AvoidRect:** triggers only when the caret rect intersects the pet's frame in 2D. When triggered, the pet picks the horizontal direction that exits the rect with the shortest horizontal distance (computed in `decide_intent`, passed as `Direction` in the rect's accompanying intent payload — or equivalently as a signed `exit_dx: f32`).
   - `Pet::set_intent(&mut self, intent: BehaviorIntent)`.
   - The walk-cycle state machine consults the current intent at each cycle boundary to pick walk direction. `AvoidRect` is the one priority case that interrupts mid-walk; the others only take effect at the next boundary.
   - Existing personality animations (blink, happy, sleepy, curious) play during walk cycles unchanged.
+  - `PetTick` is unchanged — still `{ state, frame_index, speed_x }`. The pet keeps emitting horizontal speed only; the intent only influences which horizontal direction the next walk picks.
 
-- `src/window_macos.rs` (extended):
-  - `set_auto_hidden(&mut self, hidden: bool)`. Internally the controller tracks `user_visible: bool` and `auto_hidden: bool` independently; the window is shown iff `user_visible && !auto_hidden`.
-  - Existing `set_visible(bool)` updates `user_visible` only.
+- `src/app.rs` window-visibility composition (no new controller — `window_macos.rs` stays a collection of helper functions):
+  - `DesktopPetApp` already owns `pet_visible: bool` (app.rs:72). Add a sibling field `auto_hidden: bool` (default false, runtime-only, never persisted to settings).
+  - New private helper: `fn effective_window_visible(&self) -> bool { self.pet_visible && !self.auto_hidden }`.
+  - New private helper: `fn apply_window_visibility(&self)` — calls `window.set_visible(self.effective_window_visible())` plus the existing redraw/tick-resume logic that lives today inside `set_pet_visible` (app.rs:363-380).
+  - The existing `set_pet_visible(&mut self, visible: bool)` is refactored: updates `self.pet_visible`, then calls `apply_window_visibility()` instead of calling `window.set_visible` directly with the raw `visible` argument.
+  - New method `set_auto_hidden(&mut self, hidden: bool)` on `DesktopPetApp`: updates `self.auto_hidden`, then calls `apply_window_visibility()`. Does NOT touch settings or save to disk. Does NOT call `sync_settings_window()` / `sync_menu_bar()` — auto-hide is invisible to the user-facing controls.
+  - Tick cadence while auto-hidden: the tick loop continues to run so the workspace observer and pet state machine stay live. The redraw call inside `tick` is gated on `effective_window_visible()` — when hidden, no redraw is requested. This matches the existing pattern around `IDLE_FRAME_TIME` / `SLEEP_FRAME_TIME` (app.rs:33-35); we add a similar gate.
+  - Drag termination on auto-hide entry: before `set_auto_hidden(true)` flips the flag, the app inspects `self.interaction.is_dragging()` and synthesizes a drag-end if needed, to avoid the leaked held-mouse state called out in §"Error handling and degradation".
 
 - `src/app.rs` (orchestration):
   - Owns a `WorkspaceObserver` and a `Settings`.
@@ -105,6 +140,19 @@ com.jetbrains.*                  // matched by prefix
 
 - `src/settings_window_macos.rs` (extended):
   - Three new `NSButton` checkboxes under a "Workspace Awareness" section heading. A "Re-request Accessibility permission" button next to `avoid_text_cursor`.
+  - Each control is wired through the existing settings-window pattern: control change → `SettingsWindowController` emits an `AppCommand` via the `EventLoopProxy<AppCommand>` (same path personality/scale/movement-speed/etc. use today).
+
+- `src/app.rs::AppCommand` (extended) — new variants:
+  - `SetFollowCursorWhenIdle(bool)`
+  - `SetAvoidTextCursor(bool)`
+  - `SetHideOnFullscreen(bool)`
+  - `RequestAccessibilityPermission`
+
+  These are handled in `DesktopPetApp`'s command dispatch (alongside `SetPersonality`, `SetScale`, etc.). The three `Set*` variants update `self.settings.<field>`, call `save_settings()`, and on the next tick the new value gates `decide_intent` / `set_auto_hidden`. `RequestAccessibilityPermission` calls into `WorkspaceObserver::request_accessibility_if_needed()`.
+
+- `src/menu_bar.rs` — no changes. The three toggles are settings-panel-only (decided in §3); no new `MENU_TAG_*` constants and no new `command_from_tag` arms. The existing menu bar tag namespace stays clean.
+
+- `src/command_target_macos.rs` — no changes required. The new `AppCommand` variants flow through the same `EventLoopProxy` channel that the settings window already uses; the `CommandTarget` Objective-C bridge is only invoked for menu items, which we are not adding.
 
 ## Data flow per tick
 
@@ -119,23 +167,25 @@ app.rs main loop
    │       ├─ poll CGWindowListCopyWindowInfo → fullscreen check  (every 500ms)
    │       └─ poll AX caret rect (if permission granted)          (every 250ms)
    │
-   ├─► decide_intent(&snapshot, &settings, pet_pos)
+   ├─► decide_intent(&snapshot, &settings, pet_frame)  -> BehaviorIntent
    │       ┌─────────────────────────────────────────────────────┐
-   │       │ if avoid_text_cursor && caret intersects pet frame: │
+   │       │ if avoid_text_cursor && caret rect intersects       │
+   │       │       pet_frame in 2D:                              │
    │       │     intent = AvoidRect(caret_rect)                  │
    │       │ elif follow_cursor_when_idle && snapshot.is_idle(): │
-   │       │     intent = ChaseCursor(cursor_pos)                │
+   │       │     intent = ChaseCursor(target_x=cursor.x)         │
    │       │ elif follow_cursor_when_idle && snapshot.is_busy(): │
-   │       │     intent = AvoidCursor(cursor_pos)                │
+   │       │     intent = AvoidCursor(from_x=cursor.x)           │
    │       │ else:                                               │
    │       │     intent = Idle                                   │
    │       └─────────────────────────────────────────────────────┘
    │
-   ├─► pet.set_intent(intent)
+   ├─► pet.set_intent(intent)        // 1D horizontal direction only
    │
-   └─► window.set_auto_hidden(
+   └─► self.set_auto_hidden(
            settings.hide_on_fullscreen && snapshot.fullscreen_active
-       )
+       )                              // updates self.auto_hidden, then
+                                      // apply_window_visibility()
 ```
 
 The snapshot is consumed and dropped per tick — no shared mutable state between modules. `pet.rs` and `window_macos.rs` see only the resolved intent / boolean. Policy lives in `app.rs::decide_intent`, observation lives in `workspace.rs`. Each is testable in isolation.
@@ -160,7 +210,7 @@ If `CGWindowListCopyWindowInfo` returns an error (rare, can happen during displa
 - Cursor on another display → chase/avoid still computes against global coords; the pet effectively walks to the edge of its display nearest the cursor, clamped by existing physics bounds.
 - Caret rect on another display → no intersection with the pet's frame, no avoidance triggered.
 
-**Drag-in-progress + fullscreen.** If the pet is being dragged when fullscreen begins, terminate the drag synchronously (drop the drag state in `interaction.rs`) before calling `orderOut:`. Avoids leaked held-mouse state.
+**Drag-in-progress + fullscreen.** If the pet is being dragged when fullscreen begins, `set_auto_hidden(true)` first terminates the drag synchronously by clearing the `InteractionState` (drop dragging + hover flags) before flipping `auto_hidden` and calling `apply_window_visibility()`. Avoids leaked held-mouse state.
 
 **Pet stuck near screen edge.** The existing physics module clamps to the configured bounds. New behavior only sets target direction; final position is always clamped by physics. No change needed.
 
@@ -188,15 +238,27 @@ If `CGWindowListCopyWindowInfo` returns an error (rare, can happen during displa
 - `set_intent(AvoidRect)` interrupts immediately.
 - Repeated `set_intent(Idle)` is idempotent and preserves walk progress.
 
-`window_macos.rs` visibility composition (table-driven test):
-- `(user_visible, auto_hidden) = (T,F)` → shown.
+`DesktopPetApp` visibility composition (table-driven test against `effective_window_visible`):
+- `(pet_visible, auto_hidden) = (T,F)` → shown.
 - `(T,T)` → hidden.
 - `(F,F)` → hidden.
 - `(F,T)` → hidden.
-- Sequence: visible → fullscreen-hide → user-toggle-off → fullscreen-end → still hidden.
+- Sequence: visible → `set_auto_hidden(true)` → `set_pet_visible(false)` → `set_auto_hidden(false)` → still hidden (pet_visible drives it).
+- `set_auto_hidden(true)` does not modify `self.settings.pet_visible` and does not call `save_settings()`.
 
 `settings.rs` deserialization:
 - Load fixture JSON missing the three new keys → all three default to `true`.
+
+`workspace.rs` coord normalization (pure functions, no macOS runtime):
+- `cocoa_screen_to_pet_space((x, y), display_y_span)` flips Y correctly for known inputs.
+- `quartz_rect_to_pet_space(rect)` is identity (round-trip equal).
+- `monitor_size_physical_to_logical(size, scale_factor)` divides correctly for `scale_factor = 1.0, 2.0, 1.5`.
+
+Command dispatch (in `app.rs`):
+- `AppCommand::SetFollowCursorWhenIdle(false)` updates `self.settings.follow_cursor_when_idle` and calls `save_settings()`.
+- `AppCommand::SetAvoidTextCursor(true)` triggers `request_accessibility_if_needed()` on the observer.
+- `AppCommand::SetHideOnFullscreen(false)` immediately allows next-tick `set_auto_hidden(false)` even if fullscreen is currently true.
+- `AppCommand::RequestAccessibilityPermission` calls into the observer's prompt path.
 
 ### Smoke test (extend `scripts/`)
 
@@ -205,7 +267,7 @@ Inject synthetic snapshots into a `WorkspaceObserver` trait + `FakeObserver` imp
 Smoke scenarios:
 - Boot, idle 6 s → assert pet enters chase intent.
 - Boot, frontmost = Xcode → assert pet enters avoid-cursor intent within 1 s.
-- Synthesize a fullscreen window → assert window is `orderOut:` within 1 s.
+- Synthesize a fullscreen-active snapshot → assert `effective_window_visible()` becomes `false` within 1 s and `window.set_visible(false)` is observed.
 
 ### Manual verification checklist (run during implementation)
 
