@@ -15,27 +15,30 @@ pub struct BlitOptions {
 
 pub struct PetRenderer {
     pixels: Pixels<'static>,
-    surface_width: u32,
-    surface_height: u32,
+    buffer_width: u32,
+    buffer_height: u32,
 }
 
 impl PetRenderer {
-    pub fn new(window: Arc<Window>, width: u32, height: u32) -> Result<Self, pixels::Error> {
-        let surface_texture = SurfaceTexture::new(width, height, window);
-        let pixels = Pixels::new(width, height, surface_texture)?;
+    pub fn new(
+        window: Arc<Window>,
+        surface_width: u32,
+        surface_height: u32,
+        buffer_width: u32,
+        buffer_height: u32,
+    ) -> Result<Self, pixels::Error> {
+        let surface_texture = SurfaceTexture::new(surface_width, surface_height, window);
+        let pixels = Pixels::new(buffer_width, buffer_height, surface_texture)?;
 
         Ok(Self {
             pixels,
-            surface_width: width,
-            surface_height: height,
+            buffer_width,
+            buffer_height,
         })
     }
 
     pub fn resize(&mut self, width: u32, height: u32) -> Result<(), pixels::TextureError> {
-        self.surface_width = width;
-        self.surface_height = height;
-        self.pixels.resize_surface(width, height)?;
-        self.pixels.resize_buffer(width, height)
+        self.pixels.resize_surface(width, height)
     }
 
     pub fn draw(
@@ -50,8 +53,8 @@ impl PetRenderer {
             sprite_sheet,
             rect,
             frame,
-            self.surface_width,
-            self.surface_height,
+            self.buffer_width,
+            self.buffer_height,
             BlitOptions {
                 dest_x: 0,
                 dest_y: 0,

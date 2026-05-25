@@ -6,7 +6,7 @@ use std::{
 use log::{error, warn};
 use winit::{
     application::ApplicationHandler,
-    dpi::{LogicalSize, PhysicalPosition},
+    dpi::{LogicalPosition, LogicalSize},
     event::WindowEvent,
     event_loop::{ActiveEventLoop, ControlFlow},
     window::{Window, WindowAttributes, WindowId},
@@ -27,6 +27,8 @@ pub const WINDOW_SCALE: u32 = 2;
 pub const WINDOW_SIZE: u32 = FRAME_SIZE * WINDOW_SCALE;
 
 const TARGET_FRAME_TIME: Duration = Duration::from_millis(16);
+const IDLE_FRAME_TIME: Duration = Duration::from_millis(200);
+const SLEEP_FRAME_TIME: Duration = Duration::from_millis(500);
 const MAX_TICK_DELTA: Duration = Duration::from_millis(100);
 const FALLBACK_BOUNDS_WIDTH: f32 = 800.0;
 const FALLBACK_BOUNDS_HEIGHT: f32 = 600.0;
@@ -69,7 +71,7 @@ impl DesktopPetApp {
         }
     }
 
-    fn create_window(&mut self, event_loop: &ActiveEventLoop) {
+    fn create_window(&mut self, event_loop: &ActiveEventLoop) -> bool {
         let attributes = WindowAttributes::default()
             .with_title("DesktopPet")
             .with_inner_size(LogicalSize::new(WINDOW_SIZE as f64, WINDOW_SIZE as f64))
@@ -82,7 +84,7 @@ impl DesktopPetApp {
             Err(error) => {
                 error!("failed to create desktop pet window: {error}");
                 event_loop.exit();
-                return;
+                return false;
             }
         };
 
@@ -94,15 +96,24 @@ impl DesktopPetApp {
         self.update_bounds_from_window(event_loop);
         self.move_window_to_pet();
 
-        match PetRenderer::new(Arc::clone(&window), WINDOW_SIZE, WINDOW_SIZE) {
+        let surface_size = window.inner_size();
+        match PetRenderer::new(
+            Arc::clone(&window),
+            surface_size.width,
+            surface_size.height,
+            FRAME_SIZE,
+            FRAME_SIZE,
+        ) {
             Ok(renderer) => {
                 self.renderer = Some(renderer);
                 window.request_redraw();
+                true
             }
             Err(error) => {
                 error!("failed to create pet renderer: {error}");
                 self.window = None;
                 event_loop.exit();
+                false
             }
         }
     }
@@ -143,11 +154,16 @@ impl DesktopPetApp {
         if let Some(monitor) = monitor {
             let position = monitor.position();
             let size = monitor.size();
+            let scale_factor = self
+                .window
+                .as_ref()
+                .map(|window| window.scale_factor())
+                .unwrap_or_else(|| monitor.scale_factor()) as f32;
             self.physics.bounds = Bounds {
-                min_x: position.x as f32,
-                min_y: position.y as f32,
-                max_x: position.x as f32 + size.width as f32,
-                max_y: position.y as f32 + size.height as f32,
+                min_x: position.x as f32 / scale_factor,
+                min_y: position.y as f32 / scale_factor,
+                max_x: (position.x as f32 + size.width as f32) / scale_factor,
+                max_y: (position.y as f32 + size.height as f32) / scale_factor,
             };
         }
 
@@ -173,10 +189,18 @@ impl DesktopPetApp {
 
     fn move_window_to_pet(&self) {
         if let Some(window) = &self.window {
-            window.set_outer_position(PhysicalPosition::new(
-                self.physics.position.x.round() as i32,
-                self.physics.position.y.round() as i32,
+            window.set_outer_position(LogicalPosition::new(
+                f64::from(self.physics.position.x),
+                f64::from(self.physics.position.y),
             ));
+        }
+    }
+
+    fn next_tick_interval(&self) -> Duration {
+        match self.pet.state() {
+            PetState::Walk => TARGET_FRAME_TIME,
+            PetState::Idle => IDLE_FRAME_TIME,
+            PetState::Sleep => SLEEP_FRAME_TIME,
         }
     }
 
@@ -213,8 +237,8 @@ impl ApplicationHandler for DesktopPetApp {
             return;
         }
 
-        if self.window.is_none() {
-            self.create_window(event_loop);
+        if self.window.is_none() && !self.create_window(event_loop) {
+            return;
         }
 
         if self.menu_bar.is_none() {
@@ -224,7 +248,9 @@ impl ApplicationHandler for DesktopPetApp {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.tick();
-        event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + TARGET_FRAME_TIME));
+        event_loop.set_control_flow(ControlFlow::WaitUntil(
+            Instant::now() + self.next_tick_interval(),
+        ));
     }
 
     fn window_event(

@@ -28,6 +28,7 @@ pub struct Pet {
     frame_elapsed: Duration,
     state_elapsed: Duration,
     walk_distance_remaining: f32,
+    completed_walk_cycles: u32,
 }
 
 const FRAME_COUNT: usize = 4;
@@ -62,6 +63,7 @@ impl Pet {
             frame_elapsed: Duration::ZERO,
             state_elapsed: Duration::ZERO,
             walk_distance_remaining: 0.0,
+            completed_walk_cycles: 0,
         }
     }
 
@@ -102,11 +104,16 @@ impl Pet {
     fn advance_state(&mut self, dt: Duration) {
         match self.state {
             PetState::Idle if self.state_elapsed >= Duration::from_secs(5) => {
-                self.enter_walk();
+                if self.completed_walk_cycles >= 2 {
+                    self.enter_sleep();
+                } else {
+                    self.enter_walk();
+                }
             }
             PetState::Walk => {
                 self.walk_distance_remaining -= WALK_SPEED * dt.as_secs_f32();
                 if self.walk_distance_remaining <= 0.0 {
+                    self.completed_walk_cycles += 1;
                     self.enter_idle();
                 }
             }
@@ -131,6 +138,15 @@ impl Pet {
         self.frame_elapsed = Duration::ZERO;
         self.state_elapsed = Duration::ZERO;
         self.walk_distance_remaining = WALK_DISTANCE;
+    }
+
+    fn enter_sleep(&mut self) {
+        self.state = PetState::Sleep;
+        self.frame_index = 0;
+        self.frame_elapsed = Duration::ZERO;
+        self.state_elapsed = Duration::ZERO;
+        self.walk_distance_remaining = 0.0;
+        self.completed_walk_cycles = 0;
     }
 
     fn frame_duration(&self) -> Duration {
@@ -158,6 +174,7 @@ impl Pet {
         self.frame_index = 0;
         self.frame_elapsed = Duration::ZERO;
         self.state_elapsed = Duration::ZERO;
+        self.completed_walk_cycles = 0;
         self.walk_distance_remaining = match state {
             PetState::Walk => WALK_DISTANCE,
             PetState::Idle | PetState::Sleep => 0.0,
@@ -233,6 +250,45 @@ mod tests {
     fn sleep_returns_to_idle_after_12_seconds() {
         let mut pet = Pet::new();
         pet.force_state_for_test(PetState::Sleep);
+
+        let tick = pet.tick(Duration::from_secs(12));
+
+        assert_eq!(pet.state(), PetState::Idle);
+        assert_eq!(tick.state, PetState::Idle);
+        assert_eq!(tick.frame_index, 0);
+        assert_eq!(tick.speed_x, 0.0);
+    }
+
+    #[test]
+    fn sleep_is_naturally_reachable_after_two_walk_cycles() {
+        let mut pet = Pet::new();
+
+        for _ in 0..2 {
+            pet.tick(Duration::from_secs(5));
+            assert_eq!(pet.state(), PetState::Walk);
+
+            pet.tick(Duration::from_secs_f32(WALK_DISTANCE / WALK_SPEED));
+            assert_eq!(pet.state(), PetState::Idle);
+        }
+
+        let tick = pet.tick(Duration::from_secs(5));
+
+        assert_eq!(pet.state(), PetState::Sleep);
+        assert_eq!(tick.state, PetState::Sleep);
+        assert_eq!(tick.frame_index, 0);
+        assert_eq!(tick.speed_x, 0.0);
+    }
+
+    #[test]
+    fn naturally_reached_sleep_returns_to_idle_after_12_seconds() {
+        let mut pet = Pet::new();
+
+        for _ in 0..2 {
+            pet.tick(Duration::from_secs(5));
+            pet.tick(Duration::from_secs_f32(WALK_DISTANCE / WALK_SPEED));
+        }
+        pet.tick(Duration::from_secs(5));
+        assert_eq!(pet.state(), PetState::Sleep);
 
         let tick = pet.tick(Duration::from_secs(12));
 
