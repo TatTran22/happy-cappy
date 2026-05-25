@@ -32,15 +32,31 @@ Normalization contract per signal:
 
 | Source | Native space | Conversion to pet space |
 |---|---|---|
-| `NSEvent.mouseLocation` | Cocoa screen, bottom-left origin, points | `logical_y = total_display_y_span - cocoa_y`; x unchanged |
+| `NSEvent.mouseLocation` | Cocoa global, primary-display bottom-left origin, Y up, points | `quartz_y = primary_display_height - cocoa_y`; x unchanged. The Cocoa and Quartz spaces share the same origin column (primary display's left edge); only the Y axis flips, pivoting around the primary display's height. This formula is correct for points on any secondary display, including displays with negative coordinates or vertical layouts, because both coord systems are anchored to the same primary display. |
 | `CGWindowListCopyWindowInfo` bounds | Quartz, top-left origin, points | No flip needed; bounds already in points |
 | `AXValue` rect from `kAXBoundsForRangeParameterizedAttribute` | Quartz, top-left origin, points | No flip needed |
 | `NSScreen` frame (for fullscreen comparison) | Cocoa, bottom-left, points | Convert to Quartz top-left so it matches `CGWindowList` bounds |
 | `winit::Monitor::size()` (physical pixels) | Top-left, physical | Divide by `scale_factor` to get logical points |
 
-The active display for all per-display logic is the one the pet currently sits on, identified by `active_monitor_name` (already tracked in `DesktopPetApp`). The observer is told which display the pet is on via a `fn set_active_display(&mut self, name: Option<String>)` setter the app calls whenever it updates `active_monitor_name`. Multi-display correctness flows from "all comparisons happen in the active display's logical-point space".
+The active display for all per-display logic is the one the pet currently sits on. The observer is told about it via:
 
-For the fullscreen check specifically: a window from `CGWindowListCopyWindowInfo` is "fullscreen on the pet's display" iff its bounds equal the active display's logical bounds within 1 px on each side. Both sides are in points, top-left origin, no per-display origin adjustment needed because we compare against the active display's own `NSScreen.frame` converted to Quartz.
+```rust
+pub struct DisplayInfo {
+    pub name: Option<String>,         // monitor.name(); diagnostic only, not unique
+    pub bounds_logical: Rect,         // pet-space, top-left origin, points
+    pub scale_factor: f32,            // window.scale_factor()
+}
+
+impl WorkspaceObserver {
+    pub fn set_active_display(&mut self, info: Option<DisplayInfo>);
+}
+```
+
+The app calls `set_active_display(Some(DisplayInfo { ... }))` whenever `DesktopPetApp::recompute_physics_bounds()` (or the equivalent block at `app.rs:220-247`) updates `active_monitor_name` — sourcing `bounds_logical` from `position`/`size` divided by `scale_factor`, and `scale_factor` from `window.scale_factor()`. Passing only `name` is not enough because monitor names are not unique and don't recover origin/size/scale.
+
+For the fullscreen check specifically: a window from `CGWindowListCopyWindowInfo` is "fullscreen on the pet's display" iff its bounds equal `active_display.bounds_logical` within 1 px on each side. Both sides are in points, top-left origin (Quartz), no per-display origin adjustment needed because `bounds_logical` already encodes the display's global origin and the `CGWindowList` bounds are in the same space.
+
+The primary-display height used by the Y-flip is also required state in the observer (collected at the same time the active display is updated). The app supplies it via the same `set_active_display` call (or a separate `set_primary_display_height` if the pet's display is not the primary).
 
 ## Signals and how they're observed
 
@@ -102,7 +118,7 @@ com.jetbrains.*                  // matched by prefix
 ### Module layout
 
 - `src/physics.rs` (extended):
-  - New `Rect { min: Vec2, max: Vec2 }` type alongside the existing `Vec2` and `Bounds`, used by `WorkspaceSnapshot.caret_rect` and `BehaviorIntent::AvoidRect`. Single canonical geometry type rather than re-inventing per module.
+  - New `Rect { min: Vec2, max: Vec2 }` type alongside the existing `Vec2` and `Bounds`, used by `WorkspaceSnapshot.caret_rect`, `DisplayInfo.bounds_logical`, and inside `decide_intent` for the pet-frame ∩ caret-rect test. Single canonical geometry type rather than re-inventing per module. Note: `Rect` does NOT appear in any `BehaviorIntent` variant — those carry only `Direction` (see pet.rs section below).
 
 - `src/workspace.rs` (~250 lines, new):
   - `WorkspaceObserver` — owns last-known counter values, last-poll timestamps per source, AX permission state, cached editor-bundle-id list.
@@ -111,16 +127,27 @@ com.jetbrains.*                  // matched by prefix
   - macOS-specific calls are behind `#[cfg(target_os = "macos")]`; other platforms get a stub `WorkspaceObserver` whose `tick` returns a default snapshot (idle = 0, no fullscreen, no caret, busy = false).
 
 - `src/pet.rs` (extended):
-  - New `BehaviorIntent` enum: `Idle | ChaseCursor { target_x: f32 } | AvoidCursor { from_x: f32 } | AvoidRect { rect: Rect }`.
+  - New `BehaviorIntent` enum, **all variants pre-resolved to 1D**:
+    ```rust
+    pub enum BehaviorIntent {
+        Idle,
+        ChaseHorizontal { direction: Direction },
+        AvoidHorizontal { direction: Direction },
+        AvoidRectHorizontal { direction: Direction },
+    }
+    ```
+    `Direction` is the existing `pet::Direction { Left, Right }` enum (pet.rs:46-48). The intent carries only the resolved horizontal direction; pet does not need the original 2D inputs.
   - **Motion is horizontal-only in v1.** This matches the existing model: `PetTick.speed_x` only (pet.rs:55), and `app.rs:262` only writes `physics.velocity.x`. `PetTick.speed_y` and any vertical pet motion are out of scope for this spec.
-  - 2D inputs from the snapshot (cursor position, caret rect) are projected to 1D inside `decide_intent` before being placed into the intent:
-    - **ChaseCursor:** `target_x = snapshot.cursor_pos.x`. The pet ambles in the cursor's general horizontal direction.
-    - **AvoidCursor:** `from_x = snapshot.cursor_pos.x`. The pet ambles horizontally away.
-    - **AvoidRect:** triggers only when the caret rect intersects the pet's frame in 2D. When triggered, the pet picks the horizontal direction that exits the rect with the shortest horizontal distance (computed in `decide_intent`, passed as `Direction` in the rect's accompanying intent payload — or equivalently as a signed `exit_dx: f32`).
+  - All 2D resolution happens in `decide_intent`:
+    - **ChaseHorizontal:** `direction = if snapshot.cursor_pos.x > pet_center_x { Right } else { Left }`. Pet ambles toward the cursor's horizontal position.
+    - **AvoidHorizontal:** `direction = opposite of ChaseHorizontal` for the cursor case. Pet ambles away.
+    - **AvoidRectHorizontal:** triggers only when the caret rect intersects the pet's frame in 2D. When triggered, `direction = the side of the caret rect that is closer to the pet`, so the pet exits with the shortest horizontal travel.
   - `Pet::set_intent(&mut self, intent: BehaviorIntent)`.
-  - The walk-cycle state machine consults the current intent at each cycle boundary to pick walk direction. `AvoidRect` is the one priority case that interrupts mid-walk; the others only take effect at the next boundary.
+  - The walk-cycle state machine consults the current intent at each cycle boundary to pick walk direction. `AvoidRectHorizontal` is the one priority case that interrupts mid-walk (it implies a danger zone the pet is currently inside); the others only take effect at the next boundary.
   - Existing personality animations (blink, happy, sleepy, curious) play during walk cycles unchanged.
   - `PetTick` is unchanged — still `{ state, frame_index, speed_x }`. The pet keeps emitting horizontal speed only; the intent only influences which horizontal direction the next walk picks.
+
+  This shape removes the earlier ambiguity (was the rect in the payload? was the direction?). Answer: only the direction. `decide_intent` is the single owner of 2D→1D resolution, and the pet is a pure consumer of resolved direction. The intersection test that triggers `AvoidRectHorizontal` still uses the full 2D `caret_rect` and `pet_frame` — but that's inside `decide_intent`, not in the intent payload.
 
 - `src/app.rs` window-visibility composition (no new controller — `window_macos.rs` stays a collection of helper functions):
   - `DesktopPetApp` already owns `pet_visible: bool` (app.rs:72). Add a sibling field `auto_hidden: bool` (default false, runtime-only, never persisted to settings).
@@ -139,8 +166,25 @@ com.jetbrains.*                  // matched by prefix
   - Three new `bool` fields: `follow_cursor_when_idle`, `avoid_text_cursor`, `hide_on_fullscreen`. Each has `#[serde(default = "default_true")]`. Existing settings files load with all three defaulting to `true`.
 
 - `src/settings_window_macos.rs` (extended):
-  - Three new `NSButton` checkboxes under a "Workspace Awareness" section heading. A "Re-request Accessibility permission" button next to `avoid_text_cursor`.
-  - Each control is wired through the existing settings-window pattern: control change → `SettingsWindowController` emits an `AppCommand` via the `EventLoopProxy<AppCommand>` (same path personality/scale/movement-speed/etc. use today).
+  - Three new `NSButton` checkboxes (`setButtonType:NSButtonTypeSwitch`) under a "Workspace Awareness" section heading. Each is tagged with a new `MENU_TAG_*` constant, has its action set to `CommandTarget::settings_value_selector()` (= `dispatchSettingsValue:`), and its target set to the shared `CommandTarget` — same wiring as the existing scale/movement-speed sliders.
+  - A separate "Re-request Accessibility permission" `NSButton` (push button, not a checkbox) tagged with its own constant, with action set to `CommandTarget::command_selector()` (= `dispatchCommand:`). It carries no payload — it just emits an `AppCommand`.
+
+- `src/menu_bar.rs` — extended with four new tag constants in the existing 11xx range (settings-control tags, not menu-item tags):
+  ```rust
+  pub const MENU_TAG_FOLLOW_CURSOR_WHEN_IDLE: isize = 1106;
+  pub const MENU_TAG_AVOID_TEXT_CURSOR: isize = 1107;
+  pub const MENU_TAG_HIDE_ON_FULLSCREEN: isize = 1108;
+  pub const MENU_TAG_REREQUEST_ACCESSIBILITY: isize = 1109;
+  ```
+  `command_from_tag` gets a new arm for `MENU_TAG_REREQUEST_ACCESSIBILITY` returning `Some(AppCommand::RequestAccessibilityPermission)`. The three checkbox tags do NOT go in `command_from_tag` because they carry state — they are read inside `dispatchSettingsValue:` instead. No menu-bar menu items are added; these are settings-window tags only, matching how the existing `MENU_TAG_SCALE` etc. are used.
+
+- `src/command_target_macos.rs::dispatchSettingsValue:` (extended) — three new tag arms read `NSButton.state` (`NSControlStateValueOn = 1`, `NSControlStateValueOff = 0`) and emit the matching `AppCommand`:
+  ```rust
+  MENU_TAG_FOLLOW_CURSOR_WHEN_IDLE => Some(AppCommand::SetFollowCursorWhenIdle(read_button_state(sender))),
+  MENU_TAG_AVOID_TEXT_CURSOR        => Some(AppCommand::SetAvoidTextCursor(read_button_state(sender))),
+  MENU_TAG_HIDE_ON_FULLSCREEN       => Some(AppCommand::SetHideOnFullscreen(read_button_state(sender))),
+  ```
+  A small helper `fn read_button_state(sender: &AnyObject) -> bool { unsafe { msg_send![sender, state] as NSInteger } != 0 }` is added alongside the existing `read_double_value`.
 
 - `src/app.rs::AppCommand` (extended) — new variants:
   - `SetFollowCursorWhenIdle(bool)`
@@ -149,10 +193,6 @@ com.jetbrains.*                  // matched by prefix
   - `RequestAccessibilityPermission`
 
   These are handled in `DesktopPetApp`'s command dispatch (alongside `SetPersonality`, `SetScale`, etc.). The three `Set*` variants update `self.settings.<field>`, call `save_settings()`, and on the next tick the new value gates `decide_intent` / `set_auto_hidden`. `RequestAccessibilityPermission` calls into `WorkspaceObserver::request_accessibility_if_needed()`.
-
-- `src/menu_bar.rs` — no changes. The three toggles are settings-panel-only (decided in §3); no new `MENU_TAG_*` constants and no new `command_from_tag` arms. The existing menu bar tag namespace stays clean.
-
-- `src/command_target_macos.rs` — no changes required. The new `AppCommand` variants flow through the same `EventLoopProxy` channel that the settings window already uses; the `CommandTarget` Objective-C bridge is only invoked for menu items, which we are not adding.
 
 ## Data flow per tick
 
@@ -171,11 +211,14 @@ app.rs main loop
    │       ┌─────────────────────────────────────────────────────┐
    │       │ if avoid_text_cursor && caret rect intersects       │
    │       │       pet_frame in 2D:                              │
-   │       │     intent = AvoidRect(caret_rect)                  │
+   │       │     dir = side of caret_rect closer to pet center   │
+   │       │     intent = AvoidRectHorizontal { direction: dir } │
    │       │ elif follow_cursor_when_idle && snapshot.is_idle(): │
-   │       │     intent = ChaseCursor(target_x=cursor.x)         │
+   │       │     dir = sign(cursor.x - pet_center_x) as Direction│
+   │       │     intent = ChaseHorizontal { direction: dir }     │
    │       │ elif follow_cursor_when_idle && snapshot.is_busy(): │
-   │       │     intent = AvoidCursor(from_x=cursor.x)           │
+   │       │     dir = sign(pet_center_x - cursor.x) as Direction│
+   │       │     intent = AvoidHorizontal { direction: dir }     │
    │       │ else:                                               │
    │       │     intent = Idle                                   │
    │       └─────────────────────────────────────────────────────┘
@@ -232,10 +275,11 @@ If `CGWindowListCopyWindowInfo` returns an error (rare, can happen during displa
 - All three gates off → always `Idle`.
 - Caret rect on a different display from the pet → no avoidance.
 - Caret rect that doesn't intersect the pet frame → no avoidance even though caret exists.
+- **Direction resolution:** cursor to pet's right → `ChaseHorizontal { Right }`; cursor to pet's left → `ChaseHorizontal { Left }`. Busy: directions flipped. AvoidRect: caret rect to pet's right → pet exits `Left` (and vice versa).
 
 `pet.rs` intent handling:
-- `set_intent(ChaseCursor)` mid-walk does not interrupt; takes effect at next walk-cycle boundary.
-- `set_intent(AvoidRect)` interrupts immediately.
+- `set_intent(ChaseHorizontal { Right })` mid-walk does not interrupt; takes effect at next walk-cycle boundary.
+- `set_intent(AvoidRectHorizontal { Left })` interrupts immediately.
 - Repeated `set_intent(Idle)` is idempotent and preserves walk progress.
 
 `DesktopPetApp` visibility composition (table-driven test against `effective_window_visible`):
@@ -250,15 +294,25 @@ If `CGWindowListCopyWindowInfo` returns an error (rare, can happen during displa
 - Load fixture JSON missing the three new keys → all three default to `true`.
 
 `workspace.rs` coord normalization (pure functions, no macOS runtime):
-- `cocoa_screen_to_pet_space((x, y), display_y_span)` flips Y correctly for known inputs.
+- `cocoa_to_quartz_y(cocoa_y, primary_height)` returns `primary_height - cocoa_y`. Test cases:
+  - Primary-display point: `cocoa=(100, 800)`, `primary_height=900` → `quartz=(100, 100)`.
+  - Secondary display above primary (Cocoa y > primary_height): `cocoa=(50, 1400)`, `primary_height=900` → `quartz=(50, -500)`. Negative Quartz y is expected and represents a point above the primary display.
+  - Secondary display below primary (Cocoa y negative): `cocoa=(50, -300)`, `primary_height=900` → `quartz=(50, 1200)`.
 - `quartz_rect_to_pet_space(rect)` is identity (round-trip equal).
 - `monitor_size_physical_to_logical(size, scale_factor)` divides correctly for `scale_factor = 1.0, 2.0, 1.5`.
+- `set_active_display(DisplayInfo { ... })` cached value is used by the next `tick`'s fullscreen comparison and Y-flip.
 
 Command dispatch (in `app.rs`):
 - `AppCommand::SetFollowCursorWhenIdle(false)` updates `self.settings.follow_cursor_when_idle` and calls `save_settings()`.
 - `AppCommand::SetAvoidTextCursor(true)` triggers `request_accessibility_if_needed()` on the observer.
 - `AppCommand::SetHideOnFullscreen(false)` immediately allows next-tick `set_auto_hidden(false)` even if fullscreen is currently true.
 - `AppCommand::RequestAccessibilityPermission` calls into the observer's prompt path.
+
+Settings-control bridge (`command_target_macos.rs::dispatchSettingsValue:`):
+- Fake `NSButton`-like sender with `state = 1` and `tag = MENU_TAG_FOLLOW_CURSOR_WHEN_IDLE` → produces `AppCommand::SetFollowCursorWhenIdle(true)`.
+- Fake sender with `state = 0` and `tag = MENU_TAG_AVOID_TEXT_CURSOR` → produces `AppCommand::SetAvoidTextCursor(false)`.
+- `read_button_state` returns `false` for `state = 0`, `true` for `state = 1` and `state = NSControlStateValueMixed` (defensive: mixed treated as on).
+- `command_from_tag(MENU_TAG_REREQUEST_ACCESSIBILITY)` returns `Some(AppCommand::RequestAccessibilityPermission)`.
 
 ### Smoke test (extend `scripts/`)
 
