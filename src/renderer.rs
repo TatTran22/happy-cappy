@@ -1,4 +1,8 @@
+use std::sync::Arc;
+
 use image::RgbaImage;
+use pixels::{Pixels, SurfaceTexture};
+use winit::window::Window;
 
 use crate::sprite::FrameRect;
 
@@ -7,6 +11,55 @@ pub struct BlitOptions {
     pub dest_x: i32,
     pub dest_y: i32,
     pub flip_x: bool,
+}
+
+pub struct PetRenderer {
+    pixels: Pixels<'static>,
+    surface_width: u32,
+    surface_height: u32,
+}
+
+impl PetRenderer {
+    pub fn new(window: Arc<Window>, width: u32, height: u32) -> Result<Self, pixels::Error> {
+        let surface_texture = SurfaceTexture::new(width, height, window);
+        let pixels = Pixels::new(width, height, surface_texture)?;
+
+        Ok(Self {
+            pixels,
+            surface_width: width,
+            surface_height: height,
+        })
+    }
+
+    pub fn resize(&mut self, width: u32, height: u32) -> Result<(), pixels::TextureError> {
+        self.surface_width = width;
+        self.surface_height = height;
+        self.pixels.resize_surface(width, height)?;
+        self.pixels.resize_buffer(width, height)
+    }
+
+    pub fn draw(
+        &mut self,
+        sprite_sheet: &RgbaImage,
+        rect: FrameRect,
+        flip_x: bool,
+    ) -> Result<(), pixels::Error> {
+        let frame = self.pixels.frame_mut();
+        clear_rgba(frame);
+        blit_frame(
+            sprite_sheet,
+            rect,
+            frame,
+            self.surface_width,
+            self.surface_height,
+            BlitOptions {
+                dest_x: 0,
+                dest_y: 0,
+                flip_x,
+            },
+        );
+        self.pixels.render()
+    }
 }
 
 pub fn clear_rgba(frame: &mut [u8]) {
