@@ -215,7 +215,19 @@ impl DesktopPetApp {
         }
     }
 
-    fn apply_settings(&mut self, settings: AppSettings) {
+    fn apply_settings(&mut self, mut settings: AppSettings) {
+        settings.scale = settings
+            .scale
+            .clamp(AppSettings::MIN_SCALE, AppSettings::MAX_SCALE);
+        settings.movement_speed = settings.movement_speed.clamp(
+            AppSettings::MIN_MOVEMENT_SPEED,
+            AppSettings::MAX_MOVEMENT_SPEED,
+        );
+        settings.hover_intensity = settings.hover_intensity.clamp(
+            AppSettings::MIN_HOVER_INTENSITY,
+            AppSettings::MAX_HOVER_INTENSITY,
+        );
+
         self.pet.apply_personality(settings.personality);
         self.pet
             .set_movement_speed_multiplier(settings.movement_speed);
@@ -227,9 +239,13 @@ impl DesktopPetApp {
             y: FRAME_SIZE as f32 * settings.scale,
         };
 
+        let had_restored_position = settings.last_position.is_some();
         if let Some(position) = settings.restored_position() {
             self.physics.position = position;
-            self.physics.clamp_to_bounds();
+        }
+        self.physics.clamp_to_bounds();
+        if had_restored_position {
+            settings.update_position(self.physics.position);
         }
 
         self.settings = settings;
@@ -247,7 +263,7 @@ impl DesktopPetApp {
             return;
         };
         if let Err(error) = self.settings.save_to(path) {
-            warn!("failed to save settings: {error}");
+            warn!("failed to save settings to {}: {error}", path.display());
         }
     }
 
@@ -256,10 +272,7 @@ impl DesktopPetApp {
             return;
         };
         let settings = match AppSettings::load_from(path) {
-            Ok(mut settings) => {
-                settings.sanitize(self.physics.bounds, self.physics.size);
-                settings
-            }
+            Ok(settings) => settings,
             Err(error) => {
                 if !matches!(
                     &error,
@@ -434,6 +447,7 @@ mod tests {
         let settings = crate::settings::AppSettings {
             personality: crate::pet::Personality::Lively,
             pet_visible: false,
+            scale: 3.0,
             ..crate::settings::AppSettings::default()
         };
 
@@ -444,5 +458,56 @@ mod tests {
             crate::pet::Personality::Lively
         );
         assert!(!app.settings_for_test().pet_visible);
+        assert_eq!(app.pet.personality(), crate::pet::Personality::Lively);
+        assert_eq!(app.pet.behavior_mode(), crate::pet::BehaviorMode::Hidden);
+        assert_eq!(app.physics.size, Vec2 { x: 192.0, y: 192.0 });
+    }
+
+    #[test]
+    fn applying_settings_clamps_restored_position_after_scale_and_syncs_settings() {
+        let mut app = DesktopPetApp::new();
+        app.physics.bounds = Bounds {
+            min_x: 0.0,
+            min_y: 0.0,
+            max_x: 250.0,
+            max_y: 250.0,
+        };
+        let settings = crate::settings::AppSettings {
+            scale: 3.0,
+            last_position: Some(crate::settings::StoredPosition { x: 200.0, y: 220.0 }),
+            ..crate::settings::AppSettings::default()
+        };
+
+        app.apply_settings_for_test(settings);
+
+        assert_eq!(app.physics.size, Vec2 { x: 192.0, y: 192.0 });
+        assert_eq!(app.physics.position, Vec2 { x: 58.0, y: 58.0 });
+        assert_eq!(
+            app.settings_for_test().last_position,
+            Some(crate::settings::StoredPosition { x: 58.0, y: 58.0 })
+        );
+    }
+
+    #[test]
+    fn applying_larger_scale_without_restored_position_clamps_current_position() {
+        let mut app = DesktopPetApp::new();
+        app.physics.bounds = Bounds {
+            min_x: 0.0,
+            min_y: 0.0,
+            max_x: 300.0,
+            max_y: 300.0,
+        };
+        app.physics.position = Vec2 { x: 170.0, y: 180.0 };
+        let settings = crate::settings::AppSettings {
+            scale: 3.0,
+            last_position: None,
+            ..crate::settings::AppSettings::default()
+        };
+
+        app.apply_settings_for_test(settings);
+
+        assert_eq!(app.physics.size, Vec2 { x: 192.0, y: 192.0 });
+        assert_eq!(app.physics.position, Vec2 { x: 108.0, y: 108.0 });
+        assert_eq!(app.settings_for_test().last_position, None);
     }
 }
