@@ -10,6 +10,29 @@ pub enum Personality {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BehaviorMode {
+    Default,
+    Hovered,
+    Dragging,
+    Walking,
+    Hidden,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationGroup {
+    Idle,
+    Blink,
+    Happy,
+    Curious,
+    Sleepy,
+    HoverCalm,
+    HoverCheerful,
+    HoverLively,
+    WalkRight,
+    Drag,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PetState {
     Idle,
     Walk,
@@ -38,6 +61,16 @@ pub struct Pet {
     state_elapsed: Duration,
     walk_distance_remaining: f32,
     completed_walk_cycles: u32,
+    personality: Personality,
+    behavior_mode: BehaviorMode,
+    animation_group: AnimationGroup,
+    expression_index: usize,
+    expression_elapsed: Duration,
+    movement_speed_multiplier: f32,
+    hover_intensity: f32,
+    hovered: bool,
+    dragging: bool,
+    hidden: bool,
 }
 
 const FRAME_COUNT: usize = 4;
@@ -73,6 +106,16 @@ impl Pet {
             state_elapsed: Duration::ZERO,
             walk_distance_remaining: 0.0,
             completed_walk_cycles: 0,
+            personality: Personality::Cheerful,
+            behavior_mode: BehaviorMode::Default,
+            animation_group: AnimationGroup::Idle,
+            expression_index: 0,
+            expression_elapsed: Duration::ZERO,
+            movement_speed_multiplier: 1.0,
+            hover_intensity: 1.0,
+            hovered: false,
+            dragging: false,
+            hidden: false,
         }
     }
 
@@ -88,6 +131,46 @@ impl Pet {
         self.frame_index
     }
 
+    pub fn personality(&self) -> Personality {
+        self.personality
+    }
+
+    pub fn behavior_mode(&self) -> BehaviorMode {
+        self.behavior_mode
+    }
+
+    pub fn current_animation_group(&self) -> AnimationGroup {
+        self.animation_group
+    }
+
+    pub fn apply_personality(&mut self, personality: Personality) {
+        self.personality = personality;
+        self.refresh_behavior_mode();
+    }
+
+    pub fn set_movement_speed_multiplier(&mut self, multiplier: f32) {
+        self.movement_speed_multiplier = multiplier.clamp(0.0, 3.0);
+    }
+
+    pub fn set_hover_intensity(&mut self, intensity: f32) {
+        self.hover_intensity = intensity.clamp(0.0, 3.0);
+    }
+
+    pub fn set_hovered(&mut self, hovered: bool) {
+        self.hovered = hovered;
+        self.refresh_behavior_mode();
+    }
+
+    pub fn set_dragging(&mut self, dragging: bool) {
+        self.dragging = dragging;
+        self.refresh_behavior_mode();
+    }
+
+    pub fn set_hidden(&mut self, hidden: bool) {
+        self.hidden = hidden;
+        self.refresh_behavior_mode();
+    }
+
     pub fn turn_around(&mut self) {
         self.direction = match self.direction {
             Direction::Left => Direction::Right,
@@ -96,11 +179,29 @@ impl Pet {
     }
 
     pub fn tick(&mut self, dt: Duration) -> PetTick {
+        if self.hidden {
+            self.refresh_behavior_mode();
+            return PetTick {
+                state: self.state,
+                frame_index: self.frame_index,
+                speed_x: 0.0,
+            };
+        }
+
         self.state_elapsed += dt;
         self.frame_elapsed += dt;
+        self.expression_elapsed += dt;
 
         self.advance_animation();
         self.advance_state(dt);
+
+        if !self.hovered && !self.dragging && self.expression_elapsed >= self.expression_interval()
+        {
+            self.expression_index = self.expression_index.wrapping_add(1);
+            self.expression_elapsed = Duration::ZERO;
+        }
+
+        self.refresh_behavior_mode();
 
         PetTick {
             state: self.state,
@@ -145,6 +246,7 @@ impl Pet {
         self.frame_index = 0;
         self.frame_elapsed = Duration::ZERO;
         self.state_elapsed = Duration::ZERO;
+        self.expression_elapsed = Duration::ZERO;
         self.walk_distance_remaining = 0.0;
     }
 
@@ -153,6 +255,7 @@ impl Pet {
         self.frame_index = 0;
         self.frame_elapsed = Duration::ZERO;
         self.state_elapsed = Duration::ZERO;
+        self.expression_elapsed = Duration::ZERO;
         self.walk_distance_remaining = WALK_DISTANCE;
     }
 
@@ -161,11 +264,16 @@ impl Pet {
         self.frame_index = 0;
         self.frame_elapsed = Duration::ZERO;
         self.state_elapsed = Duration::ZERO;
+        self.expression_elapsed = Duration::ZERO;
         self.walk_distance_remaining = 0.0;
         self.completed_walk_cycles = 0;
     }
 
     fn frame_duration(&self) -> Duration {
+        if self.behavior_mode == BehaviorMode::Hovered {
+            return self.hover_frame_duration();
+        }
+
         match self.state {
             PetState::Idle => Duration::from_millis(IDLE_FRAME_MS),
             PetState::Walk => Duration::from_millis(WALK_FRAME_MS),
@@ -174,14 +282,72 @@ impl Pet {
     }
 
     fn speed_x(&self) -> f32 {
+        if self.hidden || self.dragging || self.movement_speed_multiplier <= 0.0 {
+            return 0.0;
+        }
         if self.state != PetState::Walk {
             return 0.0;
         }
 
-        match self.direction {
+        let base = match self.direction {
             Direction::Left => -WALK_SPEED,
             Direction::Right => WALK_SPEED,
+        };
+        base * self.movement_speed_multiplier
+    }
+
+    fn refresh_behavior_mode(&mut self) {
+        self.behavior_mode = if self.hidden {
+            BehaviorMode::Hidden
+        } else if self.dragging {
+            BehaviorMode::Dragging
+        } else if self.hovered {
+            BehaviorMode::Hovered
+        } else if self.state == PetState::Walk && self.movement_speed_multiplier > 0.0 {
+            BehaviorMode::Walking
+        } else {
+            BehaviorMode::Default
+        };
+
+        self.animation_group = match self.behavior_mode {
+            BehaviorMode::Hidden => AnimationGroup::Idle,
+            BehaviorMode::Dragging => AnimationGroup::Drag,
+            BehaviorMode::Hovered => match self.personality {
+                Personality::Calm => AnimationGroup::HoverCalm,
+                Personality::Cheerful => AnimationGroup::HoverCheerful,
+                Personality::Lively => AnimationGroup::HoverLively,
+            },
+            BehaviorMode::Walking => AnimationGroup::WalkRight,
+            BehaviorMode::Default => self.default_expression_group(),
+        };
+    }
+
+    fn default_expression_group(&self) -> AnimationGroup {
+        match self.expression_index % 5 {
+            0 => AnimationGroup::Idle,
+            1 => AnimationGroup::Blink,
+            2 => AnimationGroup::Happy,
+            3 => AnimationGroup::Curious,
+            _ => AnimationGroup::Sleepy,
         }
+    }
+
+    fn expression_interval(&self) -> Duration {
+        match self.personality {
+            Personality::Calm => Duration::from_secs(5),
+            Personality::Cheerful => Duration::from_secs(3),
+            Personality::Lively => Duration::from_secs(2),
+        }
+    }
+
+    fn hover_frame_duration(&self) -> Duration {
+        let base_ms = match self.personality {
+            Personality::Calm => 220.0,
+            Personality::Cheerful => 140.0,
+            Personality::Lively => 90.0,
+        };
+        let divisor = self.hover_intensity.max(0.5);
+        Duration::from_millis((base_ms / divisor).round() as u64)
     }
 
     #[cfg(test)]
@@ -190,11 +356,13 @@ impl Pet {
         self.frame_index = 0;
         self.frame_elapsed = Duration::ZERO;
         self.state_elapsed = Duration::ZERO;
+        self.expression_elapsed = Duration::ZERO;
         self.completed_walk_cycles = 0;
         self.walk_distance_remaining = match state {
             PetState::Walk => WALK_DISTANCE,
             PetState::Idle | PetState::Sleep => 0.0,
         };
+        self.refresh_behavior_mode();
     }
 }
 
@@ -210,6 +378,63 @@ mod tests {
     }
 
     #[test]
+    fn cheerful_is_default_personality() {
+        let pet = Pet::new();
+        assert_eq!(pet.personality(), Personality::Cheerful);
+        assert_eq!(pet.behavior_mode(), BehaviorMode::Default);
+    }
+
+    #[test]
+    fn personality_changes_hover_group() {
+        let mut pet = Pet::new();
+
+        pet.apply_personality(Personality::Calm);
+        pet.set_hovered(true);
+        assert_eq!(pet.current_animation_group(), AnimationGroup::HoverCalm);
+
+        pet.apply_personality(Personality::Cheerful);
+        assert_eq!(pet.current_animation_group(), AnimationGroup::HoverCheerful);
+
+        pet.apply_personality(Personality::Lively);
+        assert_eq!(pet.current_animation_group(), AnimationGroup::HoverLively);
+    }
+
+    #[test]
+    fn dragging_overrides_hover_and_movement() {
+        let mut pet = Pet::new();
+        pet.set_hovered(true);
+        pet.set_dragging(true);
+
+        let tick = pet.tick(Duration::from_millis(100));
+
+        assert_eq!(pet.behavior_mode(), BehaviorMode::Dragging);
+        assert_eq!(pet.current_animation_group(), AnimationGroup::Drag);
+        assert_eq!(tick.speed_x, 0.0);
+    }
+
+    #[test]
+    fn expression_loop_advances_without_requiring_walk() {
+        let mut pet = Pet::new();
+        let first = pet.current_animation_group();
+        pet.tick(Duration::from_secs(3));
+        let second = pet.current_animation_group();
+
+        assert_ne!(first, second);
+        assert_eq!(pet.behavior_mode(), BehaviorMode::Default);
+    }
+
+    #[test]
+    fn movement_speed_zero_disables_walk_speed() {
+        let mut pet = Pet::new();
+        pet.set_movement_speed_multiplier(0.0);
+        pet.force_state_for_test(PetState::Walk);
+
+        let tick = pet.tick(Duration::from_millis(16));
+
+        assert_eq!(tick.speed_x, 0.0);
+    }
+
+    #[test]
     fn idle_animation_advances_every_200ms() {
         let mut pet = Pet::new();
         let tick = pet.tick(Duration::from_millis(200));
@@ -221,6 +446,17 @@ mod tests {
     fn idle_transitions_to_walk_after_threshold() {
         let mut pet = Pet::new_with_seed(1);
         pet.tick(Duration::from_secs(5));
+        assert_eq!(pet.state(), PetState::Walk);
+    }
+
+    #[test]
+    fn idle_transitions_to_walk_after_incremental_expression_ticks() {
+        let mut pet = Pet::new_with_seed(1);
+
+        for _ in 0..25 {
+            pet.tick(Duration::from_millis(200));
+        }
+
         assert_eq!(pet.state(), PetState::Walk);
     }
 
