@@ -10,7 +10,7 @@ SPRITE_PATH="$ROOT_DIR/assets/happy_cappy_spritesheet.png"
 
 if [[ ! -f "$SPRITE_PATH" ]]; then
   echo "Missing sprite asset: $SPRITE_PATH" >&2
-  echo "Create assets/pet_spritesheet.png before building the app bundle." >&2
+  echo "Create $SPRITE_PATH before building the app bundle." >&2
   exit 1
 fi
 
