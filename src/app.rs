@@ -298,6 +298,7 @@ impl DesktopPetApp {
             let size = LogicalSize::new(self.physics.size.x as f64, self.physics.size.y as f64);
             let _ = window.request_inner_size(size);
         }
+        self.sync_settings_window();
         self.move_window_to_pet();
     }
 
@@ -340,6 +341,7 @@ impl DesktopPetApp {
         if let Some(window) = &self.window {
             window.set_visible(visible);
         }
+        self.sync_settings_window();
         self.save_settings();
     }
 
@@ -423,9 +425,16 @@ impl DesktopPetApp {
         }
 
         if let Some(settings_window) = &self.settings_window {
+            settings_window.sync_settings(&self.settings);
             settings_window.show();
         } else {
             warn!("settings window is not available on this platform or thread");
+        }
+    }
+
+    fn sync_settings_window(&self) {
+        if let Some(settings_window) = &self.settings_window {
+            settings_window.sync_settings(&self.settings);
         }
     }
 

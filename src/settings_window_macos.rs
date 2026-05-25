@@ -13,6 +13,8 @@ impl SettingsWindowController {
     }
 
     pub fn show(&self) {}
+
+    pub fn sync_settings(&self, _settings: &crate::settings::AppSettings) {}
 }
 
 #[cfg(target_os = "macos")]
@@ -48,6 +50,7 @@ mod macos {
 
     pub struct SettingsWindowController {
         panel: Retained<NSPanel>,
+        show_hide_button: Retained<NSButton>,
         _target: Retained<CommandTarget>,
     }
 
@@ -116,12 +119,14 @@ mod macos {
                 AppSettings::MAX_HOVER_INTENSITY,
                 target_object,
             );
-            add_buttons(&content_view, mtm, target_object, settings.pet_visible);
+            let show_hide_button =
+                add_buttons(&content_view, mtm, target_object, settings.pet_visible);
 
             panel.center();
 
             Some(Self {
                 panel,
+                show_hide_button,
                 _target: target,
             })
         }
@@ -129,6 +134,10 @@ mod macos {
         pub fn show(&self) {
             self.panel.makeKeyAndOrderFront(None);
             self.panel.orderFrontRegardless();
+        }
+
+        pub fn sync_settings(&self, settings: &AppSettings) {
+            set_show_hide_title(&self.show_hide_button, settings.pet_visible);
         }
     }
 
@@ -236,7 +245,7 @@ mod macos {
         mtm: MainThreadMarker,
         target_object: &AnyObject,
         pet_visible: bool,
-    ) {
+    ) -> Retained<NSButton> {
         let reset = unsafe {
             NSButton::buttonWithTitle_target_action(
                 ns_string!("Reset Position"),
@@ -249,14 +258,9 @@ mod macos {
         reset.setTag(MENU_TAG_RESET as NSInteger);
         content_view.addSubview(&reset);
 
-        let show_hide_title = if pet_visible {
-            ns_string!("Hide Pet")
-        } else {
-            ns_string!("Show Pet")
-        };
         let show_hide = unsafe {
             NSButton::buttonWithTitle_target_action(
-                show_hide_title,
+                show_hide_title(pet_visible),
                 Some(target_object),
                 Some(CommandTarget::command_selector()),
                 mtm,
@@ -265,6 +269,19 @@ mod macos {
         show_hide.setFrame(rect(CONTROL_X + 124.0, 28.0, 108.0, 30.0));
         show_hide.setTag(MENU_TAG_SHOW_HIDE as NSInteger);
         content_view.addSubview(&show_hide);
+        show_hide
+    }
+
+    fn set_show_hide_title(button: &NSButton, pet_visible: bool) {
+        button.setTitle(show_hide_title(pet_visible));
+    }
+
+    fn show_hide_title(pet_visible: bool) -> &'static NSString {
+        if pet_visible {
+            ns_string!("Hide Pet")
+        } else {
+            ns_string!("Show Pet")
+        }
     }
 
     fn add_label(content_view: &NSView, mtm: MainThreadMarker, text: &NSString, y: f64) {
