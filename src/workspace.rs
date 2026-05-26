@@ -87,6 +87,7 @@ pub struct WorkspaceObserver {
     last_tick_at: Option<Instant>,
     last_key_counter: Option<i64>,
     last_frontmost_poll_at: Option<Instant>,
+    last_fullscreen_poll_at: Option<Instant>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -111,6 +112,7 @@ impl WorkspaceObserver {
             last_tick_at: None,
             last_key_counter: None,
             last_frontmost_poll_at: None,
+            last_fullscreen_poll_at: None,
         }
     }
 
@@ -154,16 +156,30 @@ impl WorkspaceObserver {
             }
         };
 
+        let fullscreen_active = {
+            let due = self
+                .last_fullscreen_poll_at
+                .map_or(true, |t| now.saturating_duration_since(t) >= std::time::Duration::from_millis(500));
+            match (due, self.active_display.as_ref()) {
+                (true, Some(display)) => {
+                    self.last_fullscreen_poll_at = Some(now);
+                    let pid = std::process::id() as i32;
+                    macos_polling::any_fullscreen_on(display.bounds_logical, pid)
+                }
+                _ => self.last_snapshot.fullscreen_active,
+            }
+        };
+
         self.last_snapshot = WorkspaceSnapshot {
             workspace_available: cfg!(target_os = "macos"),
             seconds_idle,
             typing_rate_per_sec,
             frontmost_bundle_id,
             frontmost_is_editor,
+            fullscreen_active,
             // The remaining fields stay at their previous values; later tasks
             // populate them.
             caret_rect: self.last_snapshot.caret_rect,
-            fullscreen_active: self.last_snapshot.fullscreen_active,
             cursor_pos: self.last_snapshot.cursor_pos,
         };
 
@@ -258,13 +274,153 @@ mod macos_polling {
         let app = workspace.frontmostApplication()?;
         app.bundleIdentifier().map(|s| s.to_string())
     }
+
+    use crate::physics::Rect as PetRect;
+    use objc2_core_foundation::{CFDictionary, CFNumber, CFString, CGRect};
+    use objc2_core_graphics::{
+        kCGNullWindowID, CGRectMakeWithDictionaryRepresentation, CGWindowListCopyWindowInfo,
+        CGWindowListOption,
+    };
+    use std::ffi::c_void;
+
+    /// Returns true if any on-screen, non-overlay, non-own-process window covers
+    /// `active_bounds` within 1 pt on each side. The spec's filter rules
+    /// (layer == 0, owner_pid != our_pid) match what AppKit considers a normal
+    /// application window — the layered windows (menu bar, dock overlays,
+    /// Spotlight, screensaver, etc.) live on non-zero layers and are skipped.
+    ///
+    /// Implementation notes / deviations from the plan draft:
+    /// - `CGWindowListCopyWindowInfo` in objc2-core-graphics 0.3 returns
+    ///   `Option<CFRetained<CFArray>>` (an untyped array). Element pointers are
+    ///   raw `*const c_void` that we cast to `*const CFDictionary` and
+    ///   dereference under unsafe.
+    /// - The dict lookup uses the typed wrapper `CFDictionary::value_if_present`
+    ///   from objc2-core-foundation 0.3, passing CFString keys as `*const c_void`.
+    /// - `CFNumber::as_i64` does the unwrapping the plan draft did manually via
+    ///   `CFNumberGetValue` + `SInt64Type`.
+    /// - `kCGNullWindowID` is a `pub const` in objc2-core-graphics 0.3 (not a
+    ///   newtype wrapper like the plan draft assumed).
+    pub fn any_fullscreen_on(active_bounds: PetRect, our_pid: i32) -> bool {
+        let Some(info) = CGWindowListCopyWindowInfo(
+            CGWindowListOption::OptionOnScreenOnly,
+            kCGNullWindowID,
+        ) else {
+            return false;
+        };
+
+        let key_layer = CFString::from_static_str("kCGWindowLayer");
+        let key_owner_pid = CFString::from_static_str("kCGWindowOwnerPID");
+        let key_bounds = CFString::from_static_str("kCGWindowBounds");
+
+        let count = info.count();
+        for i in 0..count {
+            // SAFETY: `i` is in `0..count`, so the index is in bounds.
+            // The array isn't mutated during this borrow.
+            let dict_ptr = unsafe { info.value_at_index(i) } as *const CFDictionary;
+            if dict_ptr.is_null() {
+                continue;
+            }
+            // SAFETY: CGWindowListCopyWindowInfo guarantees each element is a
+            // valid (non-NULL) CFDictionary owned by the CFArray we hold.
+            let dict = unsafe { &*dict_ptr };
+
+            // Filter: kCGWindowLayer != 0 → skip overlay/menubar/etc.
+            let layer = match dict_get_i64(dict, &key_layer) {
+                Some(v) => v,
+                None => continue,
+            };
+            if layer != 0 {
+                continue;
+            }
+            // Filter: own process → skip (our pet's own panel must not register
+            // as a fullscreen app).
+            let owner_pid = dict_get_i64(dict, &key_owner_pid).unwrap_or(0) as i32;
+            if owner_pid == our_pid {
+                continue;
+            }
+
+            // Read kCGWindowBounds → CFDictionary → CGRect.
+            let Some(bounds_dict) = dict_get_dict(dict, &key_bounds) else {
+                continue;
+            };
+            // SAFETY: bounds_dict points at a valid CFDictionary owned by the
+            // outer dict for as long as the outer dict is alive (which is the
+            // whole loop). We pass it as &CFDictionary to the FFI call.
+            let bounds_ref: &CFDictionary = unsafe { &*bounds_dict };
+            let mut rect = CGRect::default();
+            // SAFETY: `bounds_ref` is a valid CFDictionary, `rect` is a valid
+            // out-param pointer.
+            let ok = unsafe {
+                CGRectMakeWithDictionaryRepresentation(Some(bounds_ref), &mut rect as *mut CGRect)
+            };
+            if !ok {
+                continue;
+            }
+
+            let win = PetRect {
+                min: crate::physics::Vec2 {
+                    x: rect.origin.x as f32,
+                    y: rect.origin.y as f32,
+                },
+                max: crate::physics::Vec2 {
+                    x: (rect.origin.x + rect.size.width) as f32,
+                    y: (rect.origin.y + rect.size.height) as f32,
+                },
+            };
+            if rects_equal_within(&win, &active_bounds, 1.0) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn rects_equal_within(a: &PetRect, b: &PetRect, tol: f32) -> bool {
+        (a.min.x - b.min.x).abs() <= tol
+            && (a.min.y - b.min.y).abs() <= tol
+            && (a.max.x - b.max.x).abs() <= tol
+            && (a.max.y - b.max.y).abs() <= tol
+    }
+
+    /// Look up a key in a CFDictionary and decode it as i64 via CFNumber.
+    fn dict_get_i64(dict: &CFDictionary, key: &CFString) -> Option<i64> {
+        let key_ptr: *const c_void = (key as *const CFString).cast();
+        let mut value: *const c_void = std::ptr::null();
+        // SAFETY: `dict` is a valid CFDictionary, `key_ptr` is a valid CFString
+        // pointer (a CFType), `&mut value` is a valid out-param pointer.
+        let found = unsafe { dict.value_if_present(key_ptr, &mut value) };
+        if !found || value.is_null() {
+            return None;
+        }
+        // SAFETY: kCGWindowLayer / kCGWindowOwnerPID values are documented as
+        // CFNumber; the dict was produced by CGWindowListCopyWindowInfo.
+        let number: &CFNumber = unsafe { &*(value as *const CFNumber) };
+        number.as_i64()
+    }
+
+    /// Look up a key in a CFDictionary and return the value pointer cast to
+    /// `*const CFDictionary` if present (caller must verify the value really
+    /// is a dictionary; we only use this for `kCGWindowBounds` which is
+    /// documented as a CFDictionary).
+    fn dict_get_dict(dict: &CFDictionary, key: &CFString) -> Option<*const CFDictionary> {
+        let key_ptr: *const c_void = (key as *const CFString).cast();
+        let mut value: *const c_void = std::ptr::null();
+        // SAFETY: see dict_get_i64.
+        let found = unsafe { dict.value_if_present(key_ptr, &mut value) };
+        if !found || value.is_null() {
+            None
+        } else {
+            Some(value as *const CFDictionary)
+        }
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
 mod macos_polling {
+    use crate::physics::Rect as PetRect;
     pub fn seconds_since_last_input() -> f32 { 0.0 }
     pub fn key_down_counter() -> i64 { 0 }
     pub fn frontmost_bundle_id() -> Option<String> { None }
+    pub fn any_fullscreen_on(_active_bounds: PetRect, _our_pid: i32) -> bool { false }
 }
 
 /// Bundle identifiers we consider "editors" for the purpose of marking the user busy.
