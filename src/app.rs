@@ -893,6 +893,7 @@ impl ApplicationHandler<AppCommand> for DesktopPetApp {
     }
 }
 
+#[allow(dead_code)] // Wired into the tick loop in Task 20.
 pub(crate) fn decide_intent(
     snapshot: &crate::workspace::WorkspaceSnapshot,
     settings: &crate::settings::AppSettings,
