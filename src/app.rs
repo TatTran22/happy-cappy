@@ -545,12 +545,18 @@ impl DesktopPetApp {
                 self.save_settings();
             }
             AppCommand::SetAvoidTextCursor(value) => {
-                // TODO(Task 22): when enabling, check AX trust state and call
-                // workspace_observer.request_accessibility_now() if untrusted.
                 let mut settings = self.settings.clone();
                 settings.avoid_text_cursor = value;
                 self.apply_settings(settings);
                 self.save_settings();
+                // Toggling on with permission missing: trigger the prompt right
+                // away. macOS may suppress the dialog after sticky denial; the
+                // inline AX status label in Settings communicates the degraded
+                // state. The checkbox stays checked because the persisted setting
+                // is the user's intent.
+                if value && !self.workspace_observer.is_accessibility_trusted() {
+                    self.workspace_observer.request_accessibility_now();
+                }
             }
             AppCommand::SetHideOnFullscreen(value) => {
                 let mut settings = self.settings.clone();
@@ -559,7 +565,7 @@ impl DesktopPetApp {
                 self.save_settings();
             }
             AppCommand::RequestAccessibilityPermission => {
-                // TODO(Phase 3): trigger accessibility permission re-request flow.
+                self.workspace_observer.request_accessibility_now();
             }
             AppCommand::Nap => {
                 self.pet.start_micro_action(MicroAction::Nap);
@@ -1502,5 +1508,32 @@ mod decide_intent_tests {
         // With follow_cursor_when_idle off, the avoid arm must also be disabled.
         let intent = decide_intent(&snap(0.5, 1000.0, None), &settings, pet_frame_at(0.0));
         assert_eq!(intent, BehaviorIntent::Idle);
+    }
+
+    #[test]
+    fn handle_command_set_follow_cursor_updates_settings() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.settings_path = None;
+        app.settings.follow_cursor_when_idle = true;
+        app.handle_non_quit_command_for_test(AppCommand::SetFollowCursorWhenIdle(false));
+        assert!(!app.settings.follow_cursor_when_idle);
+    }
+
+    #[test]
+    fn handle_command_set_hide_on_fullscreen_updates_settings() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.settings_path = None;
+        app.settings.hide_on_fullscreen = true;
+        app.handle_non_quit_command_for_test(AppCommand::SetHideOnFullscreen(false));
+        assert!(!app.settings.hide_on_fullscreen);
+    }
+
+    #[test]
+    fn handle_command_set_avoid_text_cursor_updates_settings() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.settings_path = None;
+        app.settings.avoid_text_cursor = false;
+        app.handle_non_quit_command_for_test(AppCommand::SetAvoidTextCursor(true));
+        assert!(app.settings.avoid_text_cursor);
     }
 }
