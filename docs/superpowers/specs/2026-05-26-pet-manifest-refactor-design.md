@@ -1,36 +1,47 @@
 # Pet Manifest Refactor — Sub-project 1 Design
 
 **Date:** 2026-05-26
-**Status:** Draft for review
+**Status:** Draft for review (revision 2)
 **Owner:** Tat Tran
 
 ## Context
 
-Happy Cappy currently hard-codes a single capybara pet across three concerns: state machine (`src/pet.rs`), spritesheet layout (`src/sprite.rs`), and frame timing (constants in `src/pet.rs`). The `AnimationGroup` enum locks the set of animations to ten Rust variants, and adding a new animation requires modifying the enum, the spritesheet row mapping, and the behavior resolver in `Pet::refresh_behavior_mode()`.
+Happy Cappy currently hard-codes a single capybara pet across three concerns: state machine (`src/pet.rs`), spritesheet row layout (`src/sprite.rs::SpriteRow`), and frame timing (state-based constants in `src/pet.rs`). The `AnimationGroup` enum locks the set of animations to ten Rust variants. Adding a new animation requires modifying the enum, the spritesheet row mapping, and the behavior resolver in `Pet::refresh_behavior_mode()`.
 
 We want to evolve Happy Cappy toward a multi-pet / customisable platform inspired by Codex CLI's `/pets` feature (see `~/Downloads/codex-pets-reference.md`). The long-term roadmap has four sub-projects:
 
-1. **Sub-project 1 (this spec):** Animation engine refactor + pet manifest data-driven. Happy Cappy capybara loaded from an embedded JSON manifest. No behavior change visible to the user.
+1. **Sub-project 1 (this spec):** Replace the `AnimationGroup`-enum + `SpriteRow`-enum coupling with a data-driven sprite-index table per animation name. Happy Cappy capybara loaded from an embedded JSON manifest. No behavior change visible to the user.
 2. Sub-project 2: Catalog + custom pet loading from `~/Library/Application Support/Happy Cappy/pets/<id>/pet.json`.
 3. Sub-project 3: Picker UI in the Settings panel with preview pane.
-4. Sub-project 4: Notification system with external triggers, modelled on Codex `PetNotificationKind` + TTL.
+4. Sub-project 4: Notification system with external triggers. Likely introduces one-shot animations, per-frame `ms`, `loop_start`, and `fallback` — explicitly deferred from this spec.
 
-This spec covers only sub-project 1. Sub-projects 2–4 are out of scope and will get their own spec/plan cycles.
+This spec covers only sub-project 1. Sub-projects 2–4 get their own spec/plan cycles.
 
 ## Goals
 
 - Split `Pet` into a data-only `PetManifest` (parsed from JSON) and a runtime state machine `PetRuntime`.
-- Replace `AnimationGroup` enum with string-keyed animation map plus a fallback chain resolver.
-- Move frame timing from hard-coded constants to per-frame `ms` values inside the manifest.
+- Replace `AnimationGroup` enum with string-keyed animation map; each animation is just `{ frames: [u32] }` — an ordered list of sprite indices.
+- Replace `SpriteRow` enum + row-index logic in `sprite.rs` with index-based sprite slicing using the manifest's `FrameGeometry`.
 - Bundle the existing capybara as `assets/manifests/happy_cappy.json`, loaded via `include_str!`.
-- Keep all existing behavior (animation cycles, hover/drag/walk/sleep, workspace awareness, focus mode, micro-actions, drag persistence) byte-for-byte identical.
+- Keep all existing behavior (animation cycles, frame timing, hover/drag/walk/sleep, workspace awareness, focus mode, micro-actions, drag persistence) byte-for-byte identical.
 
 ## Non-goals
 
-- Multi-pet catalog, custom pet loading from disk, picker UI, notification system. Each deferred to its own sub-project.
+- Per-frame `ms`, `loop_start`, `fallback`, one-shot animations. Deferred to sub-project 4 along with notifications.
+- State-aware timing in the manifest. Frame duration stays a pure runtime concern of `PetRuntime`, computed from `behavior_mode`, `state`, `personality`, and `hover_intensity` exactly as today.
+- Multi-pet catalog, custom pet loading from disk, picker UI, notification system.
 - Changes to `workspace.rs`, `interaction.rs`, `settings.rs`, `settings_window_macos.rs`, `menu_bar.rs`, `renderer.rs`, `window_macos.rs`, `bundle.rs`, `command_target_macos.rs`. They keep their current API.
 - Changing the sprite asset (`assets/happy_cappy_spritesheet.png` stays as-is, 256×640, 4×10 grid).
-- Changes to `settings.json` schema. No `selected_pet_id` field added yet.
+- Changes to `settings.json` schema. No `selected_pet_id` field added.
+
+## Design Principle
+
+**Manifest = animation structure. Runtime = animation timing and state.**
+
+- Manifest only says *which sprite frames make up animation X*. It does not declare how fast they play, whether they loop, or what plays after them.
+- Runtime owns frame duration (state-based: 200/100/500 ms + hover intensity formula), frame advancement, cursor reset rules, and the resolver chain from behavior mode → animation name.
+
+This boundary is the smallest viable refactor that gets us a data-driven sprite table without changing observable behavior. Per-frame timing and lifecycle features land later, when notifications actually need them.
 
 ## Architecture
 
@@ -40,17 +51,21 @@ This spec covers only sub-project 1. Sub-projects 2–4 are out of scope and wil
 src/
 ├── pet/
 │   ├── mod.rs          — public API, re-exports
-│   ├── manifest.rs     — PetManifest, Animation, AnimationFrame, FrameGeometry,
-│   │                     serde Deserialize, validation, load_embedded_happy_cappy()
-│   ├── runtime.rs      — PetRuntime (state machine, renamed from Pet), BehaviorMode,
-│   │                     BehaviorIntent, PetState, Direction, Personality, PetTick,
-│   │                     AnimationCursor
-│   └── resolver.rs     — resolve_animation_chain(), lookup_with_fallback()
+│   ├── manifest.rs     — PetManifest, Animation, FrameGeometry,
+│   │                     serde Deserialize, validation,
+│   │                     load_embedded_happy_cappy()
+│   ├── runtime.rs      — PetRuntime (state machine, renamed from Pet),
+│   │                     BehaviorMode, BehaviorIntent, PetState,
+│   │                     Direction, Personality, PetTick,
+│   │                     frame_duration(), frame_position/frame_elapsed
+│   └── resolver.rs     — resolve_animation_chain(),
+│                         lookup_with_fallback() — runtime-side fallback
+│                         from a chain of candidate names to a manifest entry
 ├── sprite.rs           — trimmed; SpriteRow enum removed
 ├── ...                 — other files unchanged except for import renames
 └── assets/
     └── manifests/
-        └── happy_cappy.json   — bundled manifest, source of truth for animation data
+        └── happy_cappy.json
 ```
 
 `src/pet.rs` (current 867 LoC) is replaced by the `src/pet/` directory.
@@ -59,7 +74,7 @@ src/
 
 ```rust
 // pet/mod.rs
-pub use manifest::{PetManifest, Animation, AnimationFrame, FrameGeometry};
+pub use manifest::{PetManifest, Animation, FrameGeometry, ManifestError};
 pub use runtime::{
     PetRuntime, PetState, Direction, Personality,
     BehaviorMode, BehaviorIntent, PetTick,
@@ -67,7 +82,7 @@ pub use runtime::{
 pub use resolver::resolve_animation_chain;
 ```
 
-The current `crate::pet::Pet` callers (`app.rs` is the main one) become `crate::pet::PetRuntime`. `AnimationGroup` is removed entirely from the public API.
+The current `crate::pet::Pet` callers (`app.rs` is the main one) become `crate::pet::PetRuntime`. `AnimationGroup` is removed from the public API.
 
 ## Data Model
 
@@ -83,27 +98,21 @@ File: `assets/manifests/happy_cappy.json`.
   "spritesheetPath": "happy_cappy_spritesheet.png",
   "frame": { "width": 64, "height": 64, "columns": 4, "rows": 10 },
   "animations": {
-    "idle":           { "frames": [{"index": 0,  "ms": 200}, {"index": 1,  "ms": 200}, {"index": 2,  "ms": 200}, {"index": 3,  "ms": 200}], "loop_start": 0 },
-    "blink":          { "frames": [{"index": 4,  "ms": 200}, {"index": 5,  "ms": 200}, {"index": 6,  "ms": 200}, {"index": 7,  "ms": 200}], "loop_start": 0 },
-    "happy":          { "frames": [{"index": 8,  "ms": 200}, {"index": 9,  "ms": 200}, {"index": 10, "ms": 200}, {"index": 11, "ms": 200}], "loop_start": 0 },
-    "curious":        { "frames": [{"index": 12, "ms": 200}, {"index": 13, "ms": 200}, {"index": 14, "ms": 200}, {"index": 15, "ms": 200}], "loop_start": 0 },
-    "sleepy":         { "frames": [{"index": 16, "ms": 500}, {"index": 17, "ms": 500}, {"index": 18, "ms": 500}, {"index": 19, "ms": 500}], "loop_start": 0 },
-    "hover-calm":     { "frames": [{"index": 20, "ms": 220}, {"index": 21, "ms": 220}, {"index": 22, "ms": 220}, {"index": 23, "ms": 220}], "loop_start": 0 },
-    "hover-cheerful": { "frames": [{"index": 24, "ms": 140}, {"index": 25, "ms": 140}, {"index": 26, "ms": 140}, {"index": 27, "ms": 140}], "loop_start": 0 },
-    "hover-lively":   { "frames": [{"index": 28, "ms": 90},  {"index": 29, "ms": 90},  {"index": 30, "ms": 90},  {"index": 31, "ms": 90}],  "loop_start": 0 },
-    "walk-right":     { "frames": [{"index": 32, "ms": 100}, {"index": 33, "ms": 100}, {"index": 34, "ms": 100}, {"index": 35, "ms": 100}], "loop_start": 0 },
-    "drag":           { "frames": [{"index": 36, "ms": 200}, {"index": 37, "ms": 200}, {"index": 38, "ms": 200}, {"index": 39, "ms": 200}], "loop_start": 0 }
+    "idle":           { "frames": [0,  1,  2,  3]  },
+    "blink":          { "frames": [4,  5,  6,  7]  },
+    "happy":          { "frames": [8,  9, 10, 11] },
+    "curious":        { "frames": [12, 13, 14, 15] },
+    "sleepy":         { "frames": [16, 17, 18, 19] },
+    "hover-calm":     { "frames": [20, 21, 22, 23] },
+    "hover-cheerful": { "frames": [24, 25, 26, 27] },
+    "hover-lively":   { "frames": [28, 29, 30, 31] },
+    "walk-right":     { "frames": [32, 33, 34, 35] },
+    "drag":           { "frames": [36, 37, 38, 39] }
   }
 }
 ```
 
-Frame `ms` values preserve current behavior:
-
-- Idle/Blink/Happy/Curious row durations: 200ms each (matches current `IDLE_FRAME_MS = 200`).
-- Sleepy: 500ms (matches `SLEEP_FRAME_MS = 500`).
-- Walk-right: 100ms (matches `WALK_FRAME_MS = 100`).
-- Drag: 200ms (matches the idle default it currently falls into).
-- Hover variants: 220/140/90 ms — these are the `hover_frame_duration()` values for Calm/Cheerful/Lively at `hover_intensity = 1.0` today. Hover intensity becomes a runtime multiplier (see Resolver section).
+Sprite indices are flat: `index = row * columns + column`. So index 32 = row 8 col 0 = the WalkRight row's first frame, matching today's mapping in `sprite.rs::frame_rect`.
 
 ### Rust structs
 
@@ -130,23 +139,13 @@ pub struct FrameGeometry {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Animation {
-    pub frames: Vec<AnimationFrame>,
-    #[serde(default)]
-    pub loop_start: Option<usize>,
-    #[serde(default)]
-    pub fallback: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize)]
-pub struct AnimationFrame {
-    pub index: u32,
-    pub ms: u64,
+    pub frames: Vec<u32>,   // sprite indices into row*columns+column grid
 }
 
 fn default_manifest_version() -> u32 { 1 }
 ```
 
-`BTreeMap` (not `HashMap`) for deterministic iteration in tests and Debug output.
+`BTreeMap` (not `HashMap`) for deterministic iteration in tests and Debug output. `Animation` carries no `ms`, `loop_start`, or `fallback` — those are sub-project 4 territory.
 
 ### Validation rules
 
@@ -156,15 +155,26 @@ fn default_manifest_version() -> u32 { 1 }
 - `id` non-empty, contains no `/`, `\`, or null bytes.
 - `display_name` non-empty.
 - `frame.width`, `frame.height`, `frame.columns`, `frame.rows` all > 0.
-- For every animation: `frames.len() >= 1`.
-- For every frame: `index < frame.columns * frame.rows`.
-- For every frame: `ms >= 1` and `ms <= MAX_FRAME_DURATION_MS (= 10_000)`.
-- For every animation: `frames.len() <= MAX_FRAMES_PER_ANIMATION (= 64)`.
-- If `loop_start = Some(i)`: `i < frames.len()`.
-- If `fallback = Some(name)`: `animations.contains_key(name)`.
-- `animations.contains_key("idle")` — guarantees the terminal fallback always resolves.
+- For every animation: `frames.len() >= 1` and `frames.len() <= MAX_FRAMES_PER_ANIMATION (= 64)`.
+- For every sprite index in every animation: `index < frame.columns * frame.rows`.
+- `animations.contains_key("idle")` — guarantees the terminal fallback in the runtime resolver chain always resolves.
+- The bundled Happy Cappy manifest must additionally contain all of: `"idle"`, `"blink"`, `"happy"`, `"curious"`, `"sleepy"`, `"hover-calm"`, `"hover-cheerful"`, `"hover-lively"`, `"walk-right"`, `"drag"`. Enforced via a separate `validate_happy_cappy_required_keys()` check called from `load_embedded_happy_cappy()`, not from generic `validate()` (so future custom pets only need `"idle"`).
 
-`ManifestError` is a structured enum (one variant per failure category) implementing `std::error::Error`.
+`ManifestError` is a structured enum implementing `std::error::Error`:
+
+```rust
+pub enum ManifestError {
+    Json(serde_json::Error),
+    InvalidVersion(u32),
+    EmptyField(&'static str),
+    InvalidIdChars,
+    ZeroGeometry,
+    EmptyAnimation { name: String },
+    TooManyFrames { name: String, count: usize },
+    SpriteIndexOutOfBounds { animation: String, frame_pos: usize, index: u32, max: u32 },
+    MissingRequiredAnimation { name: &'static str },
+}
+```
 
 ### Embedded loading
 
@@ -179,17 +189,22 @@ impl PetManifest {
 
     pub fn load_embedded_happy_cappy() -> Self {
         const JSON: &str = include_str!("../../assets/manifests/happy_cappy.json");
-        Self::from_json_str(JSON)
-            .expect("bundled happy_cappy.json must be valid (caught by CI test)")
+        let manifest = Self::from_json_str(JSON)
+            .expect("bundled happy_cappy.json must parse and validate");
+        manifest.validate_happy_cappy_required_keys()
+            .expect("bundled happy_cappy.json must declare all required animations");
+        manifest
     }
 }
 ```
 
 `from_json_str` is the public core; `load_embedded_happy_cappy` is a thin wrapper for sub-project 1. Sub-project 2 will add `from_path` reusing `from_json_str`.
 
-## Animation Resolver
+## Animation Resolver (runtime-side, in Rust)
 
-### Behavior-to-name mapping (`resolve_animation_chain`)
+The resolver lives in `src/pet/resolver.rs`. It is pure Rust logic, not data-driven by the manifest. Custom pets in future sub-projects will be expected to declare these standard animation names.
+
+### Behavior-to-name mapping
 
 ```rust
 pub fn resolve_animation_chain(
@@ -223,7 +238,9 @@ pub fn resolve_animation_chain(
 }
 ```
 
-### Lookup with fallback
+The "second-tier" fallback names (`"hover"`, `"walk"`) are present so future custom pets that omit the personality-specific variants still degrade gracefully.
+
+### Lookup with fallback (runtime, not manifest)
 
 ```rust
 pub fn lookup_with_fallback<'a>(
@@ -241,85 +258,121 @@ pub fn lookup_with_fallback<'a>(
 }
 ```
 
-### `AnimationCursor` — frame from elapsed time
+The "fallback" here is runtime fallback over the candidate chain — distinct from per-animation `fallback` field (deferred to sub-project 4).
+
+## State Machine Internals
+
+`PetRuntime` retains every current field except:
+
+- Remove `animation_group: AnimationGroup`.
+- Add `manifest: PetManifest` (owned).
+- Add `current_animation_name: String` (replaces `animation_group` semantically).
+
+`frame_index: usize` and `frame_elapsed: Duration` are **kept exactly as today**. Frame advancement logic in `advance_animation()` is **unchanged** in behavior; only `FRAME_COUNT` is replaced by `manifest.animations[name].frames.len()`.
+
+`frame_duration()` is **unchanged**:
 
 ```rust
-pub struct AnimationCursor {
-    name: String,
-    elapsed_in_anim: Duration,
-}
-
-impl AnimationCursor {
-    pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into(), elapsed_in_anim: Duration::ZERO }
-    }
-
-    pub fn name(&self) -> &str { &self.name }
-
-    pub fn tick(&mut self, dt: Duration, time_multiplier: f32) {
-        let scaled = Duration::from_secs_f32(dt.as_secs_f32() * time_multiplier.max(0.0));
-        self.elapsed_in_anim += scaled;
-    }
-
-    pub fn current_frame<'a>(&self, anim: &'a Animation) -> &'a AnimationFrame {
-        let total_ms: u64 = anim.frames.iter().map(|f| f.ms).sum();
-        let elapsed_ms = self.elapsed_in_anim.as_millis() as u64;
-        let pos_ms = match anim.loop_start {
-            None => elapsed_ms.min(total_ms.saturating_sub(1)),
-            Some(start) => {
-                if elapsed_ms < total_ms {
-                    elapsed_ms
-                } else {
-                    let head_ms: u64 = anim.frames[..start].iter().map(|f| f.ms).sum();
-                    let loop_len = total_ms - head_ms;
-                    head_ms + ((elapsed_ms - head_ms) % loop_len.max(1))
-                }
-            }
-        };
-        let mut acc = 0u64;
-        for frame in &anim.frames {
-            acc += frame.ms;
-            if pos_ms < acc { return frame; }
-        }
-        anim.frames.last().expect("validation guarantees non-empty frames")
-    }
-}
-```
-
-### Hover intensity
-
-`hover_intensity` is no longer baked into per-mode frame duration. The runtime computes a `time_multiplier`:
-
-```rust
-fn time_multiplier(&self) -> f32 {
+fn frame_duration(&self) -> Duration {
     if self.behavior_mode == BehaviorMode::Hovered {
-        self.hover_intensity.max(0.5)
-    } else {
-        1.0
+        return self.hover_frame_duration();  // unchanged, still rounds
+    }
+    match self.state {
+        PetState::Idle => Duration::from_millis(IDLE_STATE_MS),
+        PetState::Walk => Duration::from_millis(WALK_STATE_MS),
+        PetState::Sleep => Duration::from_millis(SLEEP_STATE_MS),
     }
 }
 ```
 
-Applied in `cursor.tick(dt, multiplier)`. Behavior is mathematically equivalent to the current `base_ms / divisor` formula when every frame in the hover animation has the same `ms`, which is true in the bundled manifest.
-
-### Animation transition
+Constants stay in `pet/runtime.rs`:
 
 ```rust
-fn refresh_animation(&mut self) {
+const IDLE_STATE_MS:  u64 = 200;   // was IDLE_FRAME_MS
+const WALK_STATE_MS:  u64 = 100;   // was WALK_FRAME_MS
+const SLEEP_STATE_MS: u64 = 500;   // was SLEEP_FRAME_MS
+```
+
+`hover_frame_duration()` keeps its current implementation including `(base_ms / divisor).round()` to preserve fractional-intensity behavior:
+
+```rust
+fn hover_frame_duration(&self) -> Duration {
+    let base_ms = match self.personality {
+        Personality::Calm => 220.0,
+        Personality::Cheerful => 140.0,
+        Personality::Lively => 90.0,
+    };
+    let divisor = self.hover_intensity.max(0.5);
+    Duration::from_millis((base_ms / divisor).round() as u64)
+}
+```
+
+### Frame advancement
+
+```rust
+fn advance_animation(&mut self) {
+    let anim = self.manifest.animations.get(&self.current_animation_name)
+        .or_else(|| self.manifest.animations.get("idle"))
+        .expect("validation guarantees idle exists");
+    let frame_count = anim.frames.len();
+    let frame_duration = self.frame_duration();
+    while self.frame_elapsed >= frame_duration {
+        self.frame_elapsed -= frame_duration;
+        self.frame_index = (self.frame_index + 1) % frame_count;
+    }
+}
+```
+
+### Animation transition (replaces `refresh_behavior_mode`'s group-mapping arm)
+
+```rust
+fn refresh_behavior_mode(&mut self) {
+    // Compute behavior_mode exactly as today (unchanged).
+    self.behavior_mode = if self.hidden { ... } else if self.dragging { ... } ... ;
+
+    // Resolve animation name from chain — replaces the AnimationGroup match.
     let chain = resolve_animation_chain(
         self.behavior_mode,
         self.personality,
         self.expression_index,
-        self.action_override.map(|a| a.action()),  // ActionOverride is Copy
+        self.action_override.map(|a| a.action()),
     );
     let (name, _) = lookup_with_fallback(&self.manifest, chain);
-    if self.cursor.name() != name {
-        self.cursor = AnimationCursor::new(name);
-    }
+    self.current_animation_name = name.to_string();
+    // Note: NO frame_index reset here. Matches current behavior.
 }
 ```
 
-Called from `refresh_behavior_mode()` (rename: this method now also refreshes animation). Cursor resets to elapsed=0 only on name change, matching today's "reset frame_index to 0 when entering a new state".
+### Cursor reset
+
+Cursor reset (frame_index = 0, frame_elapsed = 0) happens only inside the three existing state transitions: `enter_idle()`, `enter_walk()`, `enter_sleep()`, plus the `force_state_for_test()` test helper. Identical to current code.
+
+### `current_sprite_index()`
+
+```rust
+pub fn current_sprite_index(&self) -> u32 {
+    let anim = self.manifest.animations.get(&self.current_animation_name)
+        .or_else(|| self.manifest.animations.get("idle"))
+        .expect("validation guarantees idle exists");
+    anim.frames[self.frame_index % anim.frames.len()]
+}
+```
+
+### `current_animation_name()`
+
+```rust
+pub fn current_animation_name(&self) -> &str {
+    &self.current_animation_name
+}
+```
+
+### `micro_action.rs` adjustments
+
+- Add accessor: `pub fn action(&self) -> MicroAction { self.action }` on `ActionOverride`. Needed by `PetRuntime::refresh_behavior_mode()` to feed the resolver.
+- Remove `pub fn animation_group(&self) -> AnimationGroup` — no longer referenced.
+- Keep `disables_movement()`, `tick()`, `remaining()`, `new()`.
+
+`MicroAction` enum is unchanged.
 
 ## Sprite & Renderer Changes
 
@@ -346,64 +399,17 @@ pub fn frame_rect(&self, sprite_index: u32, geometry: &FrameGeometry) -> FrameRe
 
 - `pet: Pet` → `pet: PetRuntime`.
 - `Pet::new_with_seed(seed)` → `PetRuntime::new(manifest, seed)` where `manifest = PetManifest::load_embedded_happy_cappy()`.
-- `FRAME_SIZE: u32 = 64` constant removed; window sizing reads from `runtime.manifest().frame.width` instead.
-- Per-frame draw: replace `sprite_sheet.frame_rect(SpriteRow::from(group), frame_index)` with `sprite_sheet.frame_rect(runtime.current_sprite_index(), runtime.manifest().frame)`.
-- Direction-based flip stays as-is: `runtime.direction() == Direction::Left` ⇒ `flip_x = true`.
-
-`PetRuntime` exposes a small accessor surface used by `app.rs`:
-
-```rust
-impl PetRuntime {
-    pub fn manifest(&self) -> &PetManifest { &self.manifest }
-    pub fn current_sprite_index(&self) -> u32 { /* cursor.current_frame(...).index */ }
-    pub fn current_animation_name(&self) -> &str { self.cursor.name() }
-    // unchanged: state(), direction(), behavior_mode(), personality(),
-    //            tick(), set_hovered(), set_dragging(), set_hidden(),
-    //            set_intent(), start_micro_action(), clear_micro_action(),
-    //            apply_personality(), set_movement_speed_multiplier(),
-    //            set_hover_intensity(), turn_around()
-}
-```
-
-`current_animation_group()` is removed.
-
-## State Machine Internals
-
-`PetRuntime` retains all current fields except:
-
-- Remove `animation_group: AnimationGroup`.
-- Remove `frame_index: usize` and `frame_elapsed: Duration`.
-- Add `manifest: PetManifest` (owned, cheap clone — small).
-- Add `cursor: AnimationCursor`.
-
-Constants removed from `pet/runtime.rs`:
-
-- `IDLE_FRAME_MS`, `WALK_FRAME_MS`, `SLEEP_FRAME_MS` — frame durations now live in the manifest.
-- `FRAME_COUNT = 4` — animations declare their own frame count.
-- `hover_frame_duration()` private method — replaced by `time_multiplier()` + per-frame `ms`.
-- `default_expression_group()` private method — replaced by `resolve_animation_chain` Default arm.
-
-Kept (these describe behavior, not animation): `WALK_SPEED`, `WALK_DISTANCE`, expression intervals (`Personality` → 5s/3s/2s), idle→walk threshold (5s), sleep duration (12s), walk-cycles-before-sleep (2).
-
-### `micro_action.rs` adjustments
-
-- Add accessor: `pub fn action(&self) -> MicroAction { self.action }` on `ActionOverride`. Needed by `PetRuntime::refresh_animation()` to feed the resolver.
-- Remove `pub fn animation_group(&self) -> AnimationGroup` — no longer referenced after the resolver moves into `pet/resolver.rs`.
-- Keep `disables_movement()`, `tick()`, `remaining()`, `new()`.
-
-`MicroAction` enum itself stays in `micro_action.rs` and is unchanged. The resolver in `pet/resolver.rs` matches on it directly.
-
-`tick(dt)` flow:
-
-1. Tick `action_override`, expire if done.
-2. If hidden: refresh behavior + return early.
-3. Accumulate `state_elapsed`, `expression_elapsed` (unchanged, gated by `!dragging`).
-4. `cursor.tick(dt, self.time_multiplier())` — replaces `advance_animation()` + `frame_duration()` lookups.
-5. `advance_state(dt)` — unchanged (idle→walk→sleep cycle, micro-action duration).
-6. Expression index bump on `expression_elapsed >= expression_interval()` — unchanged.
-7. `refresh_behavior_mode()` — now also calls `refresh_animation()` at the end, resetting cursor if name changed.
-
-State machine constants (`WALK_DISTANCE`, `WALK_SPEED`, expression intervals, sleep duration) stay as-is. These describe **behavior**, not **animation**, and belong in runtime.
+- `FRAME_SIZE: u32 = 64` constant removed; window sizing reads from `runtime.manifest().frame.width`.
+- Per-frame draw:
+  ```rust
+  let geometry = runtime.manifest().frame;
+  let sprite_index = runtime.current_sprite_index();
+  let rect = sprite_sheet.frame_rect(sprite_index, &geometry);
+  let flip_x = runtime.current_animation_name() == "walk-right"
+      && runtime.direction() == Direction::Left;
+  renderer.draw(sprite_sheet.image(), rect, flip_x)?;
+  ```
+- Hit-test code in `interaction.rs` already uses the same `flip_x` logic chain — the `walk-right` name check replaces the `AnimationGroup::WalkRight` check, byte-for-byte equivalent.
 
 ## Testing
 
@@ -412,100 +418,125 @@ State machine constants (`WALK_DISTANCE`, `WALK_SPEED`, expression intervals, sl
 `pet/manifest.rs`:
 
 - `parses_bundled_manifest()` — load `include_str!`, validate, no panic.
+- `bundled_manifest_declares_all_required_happy_cappy_keys()`.
 - `rejects_manifest_missing_idle()`.
 - `rejects_frame_index_out_of_bounds()`.
-- `rejects_loop_start_past_end()`.
-- `rejects_fallback_to_unknown_animation()`.
 - `rejects_empty_animation()`.
 - `rejects_zero_frame_geometry()`.
 - `rejects_manifest_version_zero()`.
-- `accepts_unknown_manifest_version_with_warning()`.
+- `accepts_unknown_future_manifest_version()`.
+- `rejects_too_many_frames_in_animation()` — `MAX_FRAMES_PER_ANIMATION + 1`.
+- `from_json_str_round_trips_minimal_manifest()` — manifest with only "idle" passes generic validate, fails happy-cappy-required-keys validate.
 
 `pet/resolver.rs`:
 
 - `chain_for_hovered_uses_personality_variant()` — three sub-cases.
 - `chain_for_default_cycles_through_5_expressions()`.
-- `chain_for_action_uses_micro_action_animation()`.
-- `lookup_falls_back_when_specific_missing()` — fixture manifest without `hover-lively` resolves Lively to `idle`.
-- `lookup_returns_idle_when_chain_completely_misses()`.
+- `chain_for_action_uses_micro_action_animation()` — Nap and CheerUp sub-cases.
+- `chain_for_walking_uses_walk_right_then_walk_then_idle()`.
+- `lookup_falls_back_when_specific_missing()` — fixture manifest without `hover-lively` resolves Lively to `idle` (no `hover` present either).
+- `lookup_uses_second_tier_when_specific_missing()` — fixture with `hover` but not `hover-lively` resolves Lively to `hover`.
 
-`pet/runtime.rs` (AnimationCursor):
+### Rewritten existing tests
 
-- `cursor_advances_through_frames_using_per_frame_ms()` — frame 0 at 0-99ms, frame 1 at 100-199ms.
-- `one_shot_animation_stays_on_final_frame()` — `loop_start = None`, elapsed > total → last frame.
-- `looping_animation_wraps_using_loop_start()` — `loop_start = Some(1)`, wraps from frame N-1 back to frame 1.
-- `animation_name_change_resets_cursor()`.
-- `time_multiplier_speeds_up_hover()` — hover intensity 2.0 advances frames in half real time.
+Existing tests in `src/pet.rs` (about 30 total) split:
 
-### Rewritten tests
+**Keep verbatim (assert state machine, not animation enum):**
+- `starts_idle_on_frame_zero` — also asserts `current_sprite_index() == 0`.
+- `dragging_overrides_hover_and_movement` — drop AnimationGroup assertion, keep state/behavior_mode + tick.speed_x assertions.
+- `dragging_pauses_*`, `movement_speed_*`, `idle_transitions_to_walk_*`, `walk_*`, `sleep_*`, `turn_around_*`, `set_intent_*` — keep, only rename `Pet` → `PetRuntime`.
+- `cheerful_is_default_personality` — keep.
 
-Existing tests in `src/pet.rs` (about 30 total) split into two groups:
-
-**Keep (assert state machine, not animation enum):**
-- `starts_idle_on_frame_zero` (assert via `state()` + `current_sprite_index() == 0`).
-- `dragging_overrides_hover_and_movement` (assert `behavior_mode == Dragging`, drop AnimationGroup check).
-- `dragging_pauses_*`, `movement_speed_*`, `idle_transitions_to_walk_after_threshold`, `walk_*`, `sleep_*`, `turn_around_*`, `set_intent_*` — all keep, only rename `Pet` → `PetRuntime`.
-
-**Rewrite to use animation name:**
-- `cheerful_is_default_personality` — drop `behavior_mode == Default` assertion if needed.
-- `personality_changes_hover_group` — assert `pet.current_animation_name() == "hover-calm"` / "hover-cheerful" / "hover-lively".
+**Rewrite to assert animation name string:**
+- `personality_changes_hover_group` — assert `current_animation_name() == "hover-calm"` / "hover-cheerful" / "hover-lively".
 - `expression_loop_advances_without_requiring_walk` — assert `current_animation_name()` changes across ticks.
 - `nap_micro_action_uses_sleepy_group_and_stops_movement` — assert `current_animation_name() == "sleepy"`.
-- `cheer_up_micro_action_uses_happy_group_temporarily` — assert `current_animation_name() == "happy"`, then `"walk-right"`.
-- `hover_overrides_micro_action_until_hover_ends` — assert name transitions.
-- `idle_animation_advances_every_200ms` — assert `current_sprite_index()` changes from 0 to 1 after 200ms.
-- `sleep_uses_slow_animation_rate` — assert sprite_index does not change at 499ms but does at 500ms.
+- `cheer_up_micro_action_uses_happy_group_temporarily` — assert names transition `"happy"` → `"walk-right"`.
+- `hover_overrides_micro_action_until_hover_ends` — assert name transitions across hover toggle.
 
-Expected total test count: ~30 existing rewritten/kept + 15 new ≈ 45 tests in `pet/` module.
+**Frame timing tests — must still pass with identical numeric boundaries:**
+- `idle_animation_advances_every_200ms` — assert `current_sprite_index()` changes between idle frames 0 and 1 after 200ms tick.
+- `sleep_uses_slow_animation_rate` — sprite_index does not change at 499ms but does at 500ms during Sleep state.
 
-### Other test files
+### New regression test for hover intensity fractional behavior
 
-`src/sprite.rs` tests: rewrite for new `frame_rect(sprite_index, &geometry)` signature.
+`hover_intensity_fractional_value_preserves_rounding_boundary()`:
+
+- Set personality Cheerful (base 140ms), hover_intensity = 1.3.
+- Expected frame_duration = round(140 / 1.3) = round(107.69) = 108ms.
+- Assert: after exactly 107ms total elapsed, sprite_index unchanged. After 108ms, advanced to next frame.
+
+This pins the rounding semantics so any future cursor refactor can't silently shift boundaries.
+
+### Cursor-reset boundary test
+
+`animation_name_change_does_not_reset_frame_index()`:
+
+- Force PetRuntime into Walk state.
+- Tick 250ms → frame_index = 2 (at WALK_STATE_MS = 100ms each, 250ms → 2 transitions).
+- Set hovered = true → behavior_mode = Hovered → animation name changes to "hover-cheerful".
+- Without ticking, assert frame_index still == 2 (no reset).
+- Assert current_sprite_index() now points into the "hover-cheerful" frames at index 2 (sprite 26).
+
+This pins the spec's most subtle parity requirement.
+
+### Sprite-row mapping tests in `sprite.rs`
+
+- `frame_rect_for_sprite_index_0_returns_top_left()`.
+- `frame_rect_for_sprite_index_32_returns_walk_row_first_column()` — explicit parity with old `SpriteRow::WalkRight, frame_index=0`.
+- `frame_rect_for_sprite_index_39_returns_drag_row_last_column()`.
+- `from_image_rejects_dimensions_not_matching_geometry()`.
+- `from_image_accepts_geometry_matching_actual_image()`.
+
+Expected total test count: ~30 existing rewritten/kept + ~17 new ≈ 47 tests across `pet/` and `sprite.rs`.
 
 ## Migration Steps
 
-1. **Add `pet/manifest.rs` + `assets/manifests/happy_cappy.json` + manifest tests.** Not wired into runtime yet. `cargo build` passes, `cargo test` runs new manifest tests in isolation.
+1. **Add `pet/manifest.rs` + `assets/manifests/happy_cappy.json` + manifest tests.** Not wired into runtime yet. `cargo build` passes, manifest tests pass.
 
 2. **Add `pet/resolver.rs` + resolver tests.** Pure functions, no runtime wiring. Tests pass.
 
-3. **Add `pet/runtime.rs` with `AnimationCursor` only (no PetRuntime yet) + cursor tests.** Existing `src/pet.rs` (with `Pet`) coexists. Tests pass.
+3. **Rename `Pet` → `PetRuntime`. Move into `pet/runtime.rs`. Add `manifest: PetManifest` and `current_animation_name: String` fields. Replace the `animation_group` match in `refresh_behavior_mode()` with a call to `resolve_animation_chain` + `lookup_with_fallback`. Delete `AnimationGroup` enum and `current_animation_group()`. Add `current_animation_name()` and `current_sprite_index()`.** Rewrite/migrate affected tests in this step.
 
-4. **Rename `Pet` → `PetRuntime`. Move it into `pet/runtime.rs`. Wire up `manifest`, `cursor`, `refresh_animation()`. Delete `AnimationGroup` enum and `current_animation_group()`. Add `current_animation_name()` and `current_sprite_index()`.** Rewrite/migrate the affected tests in this step. `src/pet.rs` deleted, `src/pet/mod.rs` re-exports. The biggest single commit; can be split further if review reveals risks.
+4. **Update `src/sprite.rs`:** delete `SpriteRow` and `impl From<AnimationGroup>`, change `frame_rect` to `(sprite_index, &FrameGeometry)`, update `SpriteSheet::load`/`from_image` signature, rewrite sprite tests.
 
-5. **Update `src/sprite.rs`:** delete `SpriteRow` and `impl From<AnimationGroup>`, change `frame_rect` to `(sprite_index, &FrameGeometry)`, update `SpriteSheet::load`/`from_image` signature, rewrite sprite tests.
+5. **Update `src/app.rs`:** import `PetRuntime`, construct with manifest, read sprite_index from runtime, update flip_x check to use animation name, drop `FRAME_SIZE` constant.
 
-6. **Update `src/app.rs`:** import `PetRuntime`, construct with manifest, read sprite_index from runtime, drop `FRAME_SIZE` constant.
+6. **Update `src/micro_action.rs`:** add `ActionOverride::action()`, remove `animation_group()`.
 
 7. **`cargo fmt && cargo clippy --all-targets --all-features -- -D warnings && cargo test`.**
 
 8. **`./scripts/verify.sh`.** Confirms fmt + tests + clippy + release build + bundle assembly + codesign (if available).
 
-9. **Manual smoke test:** open the built app, verify capybara appears, idle/walk/sleep cycle, hover reaction across all three personalities, drag-to-move + persist position, Nap and Cheer Up from menu bar, Focus Mode toggle, workspace awareness (caret avoidance, fullscreen auto-hide) — everything matches behavior before the refactor.
+9. **Manual smoke test:** open the built app, verify capybara appears, idle/walk/sleep cycle, hover reaction across all three personalities at multiple fractional intensities, drag-to-move + persist position, Nap and Cheer Up from menu bar, Focus Mode toggle, workspace awareness (caret avoidance, fullscreen auto-hide) — everything matches behavior before the refactor.
+
+Each step is a commit. Step 3 is the largest single commit and can be subdivided further during implementation planning if review reveals risk.
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
-| Frame timing drift across the refactor | Bundled manifest `ms` values match current constants exactly. Tests like `idle_animation_advances_every_200ms` re-pass with same boundaries. |
-| Hover intensity semantics change at edges | Mathematically equivalent when frames in an animation share the same `ms`, which is true for all hover variants today. |
-| Confusion between Nap micro-action and natural `PetState::Sleep` (both resolve to `"sleepy"`) | They take different code paths (`BehaviorMode::Action` vs `BehaviorMode::Default` with expression_index=4). State logic untouched, only the animation name happens to match. |
-| Bundled JSON malformed | `parses_bundled_manifest()` test runs in CI before merge. End users never hit a malformed bundle because JSON is committed alongside the binary. |
-| Future sub-project 2 disk loading requires API symmetry | `from_json_str()` is the parser core; `load_embedded_happy_cappy` is a wrapper. Sub-project 2 adds `from_path` without disturbing existing API. |
+| Frame timing accidentally shifted by the refactor | State-based `frame_duration()` formula copied verbatim. `idle_animation_advances_every_200ms`, `sleep_uses_slow_animation_rate`, and the new `hover_intensity_fractional_value_preserves_rounding_boundary()` pin numeric boundaries. |
+| Cursor inadvertently resets on animation-name change | Explicit `animation_name_change_does_not_reset_frame_index()` test prevents regression. `refresh_behavior_mode()` deliberately does NOT touch `frame_index` / `frame_elapsed`. |
+| Flip applied to non-walk animations after a leftward walk | `flip_x = name == "walk-right" && direction == Left` in `app.rs` and `interaction.rs` hit-test path. Old code's `matches!(group, AnimationGroup::WalkRight)` becomes a name-string check — byte-equivalent. |
+| Bundled JSON malformed | `parses_bundled_manifest()` + `bundled_manifest_declares_all_required_happy_cappy_keys()` tests run in CI before merge. End users never hit malformed bundle. |
+| Subtle behavior change between Nap (Action mode) and Sleep state — both resolve to "sleepy" | They go through different code paths (`BehaviorMode::Action` vs `BehaviorMode::Default + expression_index==4`). State machine logic (`completed_walk_cycles`, sleep duration 12s) is untouched. Animation name coincidence is intentional. |
+| Future sub-project 2 disk loading requires API symmetry | `from_json_str()` is the parser core; `load_embedded_happy_cappy` is a wrapper. Sub-project 2 adds `from_path` reusing `from_json_str` without disturbing existing API. |
 
 ## Exit Criteria
 
 - `cargo build --release` succeeds.
-- `cargo test` passes, ≥45 tests in `pet/` module across `manifest.rs`, `resolver.rs`, `runtime.rs`.
+- `cargo test` passes with all ~47 expected tests in `pet/` + `sprite.rs`.
 - `cargo clippy --all-targets --all-features -- -D warnings` clean.
 - `./scripts/verify.sh` passes.
 - No `#[allow(dead_code)]` annotations added.
+- `AnimationGroup` and `SpriteRow` have zero references in the codebase.
 - Manual smoke test confirms behavior parity with `main` before the refactor.
-- `AnimationGroup` enum has zero references in the codebase.
 
 ## Open Questions Deferred to Later Sub-projects
 
 - Sub-project 2 — manifest discovery rules: directory scan order, custom-pet manifest version compatibility, asset bundling for custom pets.
 - Sub-project 3 — picker UI placement: standalone tab in Settings, or row inline?
-- Sub-project 4 — notification animation namespace: prefix with `"notify-"` to avoid collision with `"happy"`, `"sleepy"` etc.
+- Sub-project 4 — animation lifecycle: per-frame `ms`, `loop_start`, `fallback`, one-shot semantics, notification → animation name mapping, namespacing (e.g. `notify-running` to avoid colliding with `happy`/`sleepy`).
 
 These are captured here only so they don't get lost; decisions belong to the respective sub-project specs.
