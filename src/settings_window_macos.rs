@@ -15,6 +15,10 @@ impl SettingsWindowController {
     pub fn show(&self) {}
 
     pub fn sync_settings(&self, _settings: &crate::settings::AppSettings) {}
+
+    pub fn is_visible(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -147,6 +151,10 @@ mod macos {
         pub fn sync_settings(&self, settings: &AppSettings) {
             set_show_hide_title(&self.show_hide_button, settings.pet_visible);
             set_focus_mode_title(&self.focus_mode_button, settings.focus_mode);
+        }
+
+        pub fn is_visible(&self) -> bool {
+            self.panel.isVisible()
         }
     }
 

@@ -577,6 +577,7 @@ impl DesktopPetApp {
         if let Some(settings_window) = &self.settings_window {
             settings_window.sync_settings(&self.settings);
             settings_window.show();
+            self.next_tick_at = Instant::now();
         } else {
             warn!("settings window is not available on this platform or thread");
         }
@@ -638,10 +639,19 @@ impl DesktopPetApp {
     }
 
     fn next_tick_interval(&self) -> Duration {
+        let settings_visible = self
+            .settings_window
+            .as_ref()
+            .is_some_and(|w| w.is_visible());
+        if settings_visible {
+            return Duration::from_millis(500);
+        }
         if !self.pet_visible {
             return Duration::from_secs(5);
         }
-
+        if self.auto_hidden {
+            return Duration::from_millis(500);
+        }
         match self.pet.behavior_mode() {
             crate::pet::BehaviorMode::Hovered
             | crate::pet::BehaviorMode::Dragging
