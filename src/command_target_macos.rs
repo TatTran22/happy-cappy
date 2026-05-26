@@ -92,6 +92,12 @@ mod macos {
                             _ => None,
                         }
                     }
+                    crate::menu_bar::MENU_TAG_AVOID_TEXT_CURSOR
+                    | crate::menu_bar::MENU_TAG_FOLLOW_CURSOR_WHEN_IDLE
+                    | crate::menu_bar::MENU_TAG_HIDE_ON_FULLSCREEN => {
+                        let state_is_on = read_button_state(sender);
+                        crate::menu_bar::settings_command_for_button(tag as isize, state_is_on)
+                    }
                     _ => None,
                 };
 
@@ -126,6 +132,11 @@ mod macos {
     fn read_double_value(sender: &AnyObject) -> f32 {
         let value: f64 = unsafe { msg_send![sender, doubleValue] };
         value as f32
+    }
+
+    fn read_button_state(sender: &AnyObject) -> bool {
+        let state: NSInteger = unsafe { msg_send![sender, state] };
+        state != 0
     }
 }
 
