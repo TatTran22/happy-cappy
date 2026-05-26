@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 use crate::micro_action::{ActionOverride, MicroAction};
+use crate::pet::manifest::PetManifest;
+use crate::pet::resolver::{lookup_with_fallback, resolve_animation_chain};
 
 pub mod manifest;
 pub mod resolver;
@@ -87,12 +89,14 @@ pub struct Pet {
     dragging: bool,
     hidden: bool,
     intent: BehaviorIntent,
+    manifest: PetManifest,
+    current_animation_name: String,
 }
 
 const FRAME_COUNT: usize = 4;
-const IDLE_FRAME_MS: u64 = 200;
-const WALK_FRAME_MS: u64 = 100;
-const SLEEP_FRAME_MS: u64 = 500;
+const IDLE_STATE_MS: u64 = 200;
+const WALK_STATE_MS: u64 = 100;
+const SLEEP_STATE_MS: u64 = 500;
 const WALK_SPEED: f32 = 45.0;
 const WALK_DISTANCE: f32 = 120.0;
 
@@ -134,6 +138,8 @@ impl Pet {
             dragging: false,
             hidden: false,
             intent: BehaviorIntent::Idle,
+            manifest: PetManifest::load_embedded_happy_cappy(),
+            current_animation_name: "idle".to_string(),
         }
     }
 
@@ -159,6 +165,28 @@ impl Pet {
 
     pub fn current_animation_group(&self) -> AnimationGroup {
         self.animation_group
+    }
+
+    pub fn current_animation_name(&self) -> &str {
+        &self.current_animation_name
+    }
+
+    pub fn current_sprite_index(&self) -> u32 {
+        let anim = self
+            .manifest
+            .animations
+            .get(&self.current_animation_name)
+            .or_else(|| self.manifest.animations.get("idle"))
+            .expect("manifest validation guarantees 'idle' exists");
+        anim.frames[self.frame_index % anim.frames.len()]
+    }
+
+    pub fn frame_size(&self) -> (u32, u32) {
+        (self.manifest.frame.width, self.manifest.frame.height)
+    }
+
+    pub fn manifest(&self) -> &PetManifest {
+        &self.manifest
     }
 
     pub fn apply_personality(&mut self, personality: Personality) {
@@ -352,9 +380,9 @@ impl Pet {
         }
 
         match self.state {
-            PetState::Idle => Duration::from_millis(IDLE_FRAME_MS),
-            PetState::Walk => Duration::from_millis(WALK_FRAME_MS),
-            PetState::Sleep => Duration::from_millis(SLEEP_FRAME_MS),
+            PetState::Idle => Duration::from_millis(IDLE_STATE_MS),
+            PetState::Walk => Duration::from_millis(WALK_STATE_MS),
+            PetState::Sleep => Duration::from_millis(SLEEP_STATE_MS),
         }
     }
 
@@ -424,6 +452,17 @@ impl Pet {
             BehaviorMode::Walking => AnimationGroup::WalkRight,
             BehaviorMode::Default => self.default_expression_group(),
         };
+
+        // Compute string animation name alongside the legacy enum. The two
+        // values are kept in sync; the enum will be removed in a later task.
+        let chain = resolve_animation_chain(
+            self.behavior_mode,
+            self.personality,
+            self.expression_index,
+            self.action_override.map(|a| a.action()),
+        );
+        let (name, _) = lookup_with_fallback(&self.manifest, chain);
+        self.current_animation_name = name.to_string();
     }
 
     fn default_expression_group(&self) -> AnimationGroup {
@@ -866,5 +905,76 @@ mod tests {
             pet.tick(std::time::Duration::ZERO).speed_x > 0.0,
             "Chase intent should be queued, not interrupt mid-walk; direction must remain Right"
         );
+    }
+
+    #[test]
+    fn current_animation_name_is_idle_at_construction() {
+        let pet = Pet::new();
+        assert_eq!(pet.current_animation_name(), "idle");
+    }
+
+    #[test]
+    fn current_animation_name_is_hover_calm_for_calm_hovered() {
+        let mut pet = Pet::new();
+        pet.apply_personality(Personality::Calm);
+        pet.set_hovered(true);
+        assert_eq!(pet.current_animation_name(), "hover-calm");
+    }
+
+    #[test]
+    fn current_animation_name_is_walk_right_when_walking() {
+        let mut pet = Pet::new();
+        pet.force_state_for_test(PetState::Walk);
+        assert_eq!(pet.current_animation_name(), "walk-right");
+    }
+
+    #[test]
+    fn current_sprite_index_starts_at_idle_frame_zero() {
+        let pet = Pet::new();
+        assert_eq!(pet.current_sprite_index(), 0);
+    }
+
+    #[test]
+    fn current_sprite_index_for_walk_starts_at_thirty_two() {
+        let mut pet = Pet::new();
+        pet.force_state_for_test(PetState::Walk);
+        assert_eq!(pet.current_sprite_index(), 32);
+    }
+
+    #[test]
+    fn frame_size_returns_manifest_geometry() {
+        let pet = Pet::new();
+        assert_eq!(pet.frame_size(), (64, 64));
+    }
+
+    #[test]
+    fn animation_name_change_does_not_reset_frame_index() {
+        // Force into Walk state, advance two full frame_durations (200ms total at 100ms/frame).
+        let mut pet = Pet::new();
+        pet.force_state_for_test(PetState::Walk);
+        pet.tick(Duration::from_millis(250));
+        assert_eq!(pet.frame_index(), 2);
+        assert_eq!(pet.current_animation_name(), "walk-right");
+
+        // Engaging hover changes the animation name but must not reset frame_index.
+        pet.set_hovered(true);
+        assert_eq!(pet.current_animation_name(), "hover-cheerful");
+        assert_eq!(pet.frame_index(), 2);
+
+        // The corresponding sprite is hover-cheerful row, column 2 → index 26.
+        assert_eq!(pet.current_sprite_index(), 26);
+    }
+
+    #[test]
+    fn hover_intensity_fractional_value_preserves_rounding_boundary() {
+        let mut pet = Pet::new();
+        pet.apply_personality(Personality::Cheerful);
+        pet.set_hover_intensity(1.3);
+        pet.set_hovered(true);
+        // base 140 / 1.3 = 107.692..., rounded to 108ms per frame
+        pet.tick(Duration::from_millis(107));
+        assert_eq!(pet.frame_index(), 0);
+        pet.tick(Duration::from_millis(1));
+        assert_eq!(pet.frame_index(), 1);
     }
 }
