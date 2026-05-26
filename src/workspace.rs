@@ -142,10 +142,10 @@ impl WorkspaceObserver {
         let (frontmost_bundle_id, frontmost_is_editor) = {
             let due = self
                 .last_frontmost_poll_at
-                .map_or(true, |t| now.saturating_duration_since(t) >= std::time::Duration::from_millis(500));
+                .is_none_or(|t| now.saturating_duration_since(t) >= std::time::Duration::from_millis(500));
             if due {
                 let id = macos_polling::frontmost_bundle_id();
-                let is_editor = id.as_deref().map_or(false, is_editor_bundle_id);
+                let is_editor = id.as_deref().is_some_and(is_editor_bundle_id);
                 self.last_frontmost_poll_at = Some(now);
                 (id, is_editor)
             } else {
@@ -159,7 +159,7 @@ impl WorkspaceObserver {
         let fullscreen_active = {
             let due = self
                 .last_fullscreen_poll_at
-                .map_or(true, |t| now.saturating_duration_since(t) >= std::time::Duration::from_millis(500));
+                .is_none_or(|t| now.saturating_duration_since(t) >= std::time::Duration::from_millis(500));
             match (due, self.active_display.as_ref()) {
                 (true, Some(display)) => {
                     self.last_fullscreen_poll_at = Some(now);
@@ -300,6 +300,13 @@ mod macos_polling {
     ///   `CFNumberGetValue` + `SInt64Type`.
     /// - `kCGNullWindowID` is a `pub const` in objc2-core-graphics 0.3 (not a
     ///   newtype wrapper like the plan draft assumed).
+    ///
+    /// **macOS 14+ caveat:** `CGWindowListCopyWindowInfo` returns reduced bounds info for
+    /// other-application windows when the calling app lacks Screen Recording permission.
+    /// On those systems, this function may silently fail to detect cross-app fullscreen
+    /// (own-app windows are unaffected). The pet does not request that permission, so
+    /// in practice we accept this limitation as the "safe default" of leaving the pet
+    /// visible when we can't confirm fullscreen.
     pub fn any_fullscreen_on(active_bounds: PetRect, our_pid: i32) -> bool {
         let Some(info) = CGWindowListCopyWindowInfo(
             CGWindowListOption::OptionOnScreenOnly,
