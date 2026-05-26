@@ -56,6 +56,9 @@ pub enum ManifestError {
         max: u32,
     },
     MissingIdleAnimation,
+    MissingRequiredAnimation {
+        name: &'static str,
+    },
 }
 
 impl fmt::Display for ManifestError {
@@ -82,6 +85,9 @@ impl fmt::Display for ManifestError {
             ),
             Self::MissingIdleAnimation => {
                 write!(f, "manifest must declare an 'idle' animation")
+            }
+            Self::MissingRequiredAnimation { name } => {
+                write!(f, "manifest is missing required animation '{name}'")
             }
         }
     }
@@ -111,7 +117,33 @@ impl PetManifest {
 
     pub fn load_embedded_happy_cappy() -> Self {
         const JSON: &str = include_str!("../../assets/manifests/happy_cappy.json");
-        Self::from_json_str(JSON).expect("bundled happy_cappy.json must parse and validate")
+        let manifest =
+            Self::from_json_str(JSON).expect("bundled happy_cappy.json must parse and validate");
+        manifest
+            .validate_happy_cappy_required_keys()
+            .expect("bundled happy_cappy.json must declare all required animations");
+        manifest
+    }
+
+    fn validate_happy_cappy_required_keys(&self) -> Result<(), ManifestError> {
+        const REQUIRED: &[&str] = &[
+            "idle",
+            "blink",
+            "happy",
+            "curious",
+            "sleepy",
+            "hover-calm",
+            "hover-cheerful",
+            "hover-lively",
+            "walk-right",
+            "drag",
+        ];
+        for name in REQUIRED {
+            if !self.animations.contains_key(*name) {
+                return Err(ManifestError::MissingRequiredAnimation { name });
+            }
+        }
+        Ok(())
     }
 
     fn validate(&self) -> Result<(), ManifestError> {
@@ -341,5 +373,82 @@ mod tests {
     fn minimal_manifest_with_only_idle_is_valid() {
         let manifest = PetManifest::from_json_str(&minimal_valid_json()).unwrap();
         assert_eq!(manifest.animations.len(), 1);
+    }
+
+    #[test]
+    fn bundled_manifest_declares_all_required_happy_cappy_keys() {
+        let manifest = PetManifest::load_embedded_happy_cappy();
+        // Should not panic — implicitly asserts validate_happy_cappy_required_keys passed.
+        // Spot-check that the required keys are present.
+        for required in &[
+            "idle",
+            "blink",
+            "happy",
+            "curious",
+            "sleepy",
+            "hover-calm",
+            "hover-cheerful",
+            "hover-lively",
+            "walk-right",
+            "drag",
+        ] {
+            assert!(
+                manifest.animations.contains_key(*required),
+                "bundled manifest must declare '{required}'"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_happy_cappy_required_keys_rejects_missing_blink() {
+        let json = r#"{
+            "id": "test",
+            "displayName": "Test",
+            "spritesheetPath": "x.png",
+            "frame": {"width": 16, "height": 16, "columns": 4, "rows": 1},
+            "animations": {
+                "idle":          {"frames": [0]},
+                "happy":         {"frames": [0]},
+                "curious":       {"frames": [0]},
+                "sleepy":        {"frames": [0]},
+                "hover-calm":    {"frames": [0]},
+                "hover-cheerful":{"frames": [0]},
+                "hover-lively":  {"frames": [0]},
+                "walk-right":    {"frames": [0]},
+                "drag":          {"frames": [0]}
+            }
+        }"#;
+        let manifest = PetManifest::from_json_str(json).unwrap();
+        let err = manifest.validate_happy_cappy_required_keys().unwrap_err();
+        assert!(matches!(
+            err,
+            ManifestError::MissingRequiredAnimation { name: "blink" }
+        ));
+    }
+
+    #[test]
+    fn validate_happy_cappy_required_keys_accepts_extra_animations() {
+        // A manifest with all 10 required keys plus extras still validates.
+        let json = r#"{
+            "id": "test",
+            "displayName": "Test",
+            "spritesheetPath": "x.png",
+            "frame": {"width": 16, "height": 16, "columns": 4, "rows": 1},
+            "animations": {
+                "idle":          {"frames": [0]},
+                "blink":         {"frames": [0]},
+                "happy":         {"frames": [0]},
+                "curious":       {"frames": [0]},
+                "sleepy":        {"frames": [0]},
+                "hover-calm":    {"frames": [0]},
+                "hover-cheerful":{"frames": [0]},
+                "hover-lively":  {"frames": [0]},
+                "walk-right":    {"frames": [0]},
+                "drag":          {"frames": [0]},
+                "wave":          {"frames": [0]}
+            }
+        }"#;
+        let manifest = PetManifest::from_json_str(json).unwrap();
+        assert!(manifest.validate_happy_cappy_required_keys().is_ok());
     }
 }

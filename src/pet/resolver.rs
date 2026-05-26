@@ -34,28 +34,11 @@ pub fn resolve_animation_chain(
 
 pub fn lookup_with_fallback<'a>(
     manifest: &'a PetManifest,
-    chain: &[&str],
+    chain: &[&'static str],
 ) -> (&'static str, &'a Animation) {
     for &name in chain {
         if let Some(anim) = manifest.animations.get(name) {
-            // Safety: `name` originated as a &'static str literal from
-            // resolve_animation_chain's tables, so promoting to 'static is sound.
-            let static_name: &'static str = match name {
-                "idle" => "idle",
-                "blink" => "blink",
-                "happy" => "happy",
-                "curious" => "curious",
-                "sleepy" => "sleepy",
-                "hover" => "hover",
-                "hover-calm" => "hover-calm",
-                "hover-cheerful" => "hover-cheerful",
-                "hover-lively" => "hover-lively",
-                "walk" => "walk",
-                "walk-right" => "walk-right",
-                "drag" => "drag",
-                _ => "idle",
-            };
-            return (static_name, anim);
+            return (name, anim);
         }
     }
     let idle = manifest
@@ -187,5 +170,15 @@ mod tests {
         let manifest = fixture_manifest(&["idle", "hover", "hover-lively"]);
         let (name, _) = lookup_with_fallback(&manifest, &["hover-lively", "hover", "idle"]);
         assert_eq!(name, "hover-lively");
+    }
+
+    #[test]
+    fn lookup_with_fallback_returns_matched_name_verbatim_even_outside_whitelist() {
+        // Use a name that exists in the manifest but never appears in the
+        // resolver's static chain tables — proves the function no longer
+        // silently rewrites unknown names to "idle".
+        let manifest = fixture_manifest(&["idle", "notify-running"]);
+        let (name, _) = lookup_with_fallback(&manifest, &["notify-running", "idle"]);
+        assert_eq!(name, "notify-running");
     }
 }

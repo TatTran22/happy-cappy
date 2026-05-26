@@ -75,7 +75,6 @@ pub struct PetRuntime {
     current_animation_name: String,
 }
 
-const FRAME_COUNT: usize = 4;
 const IDLE_STATE_MS: u64 = 200;
 const WALK_STATE_MS: u64 = 100;
 const SLEEP_STATE_MS: u64 = 500;
@@ -279,10 +278,19 @@ impl PetRuntime {
     }
 
     fn advance_animation(&mut self) {
+        let frame_count = self
+            .manifest
+            .animations
+            .get(&self.current_animation_name)
+            .or_else(|| self.manifest.animations.get("idle"))
+            .expect("manifest validation guarantees 'idle' exists")
+            .frames
+            .len()
+            .max(1);
         let frame_duration = self.frame_duration();
         while self.frame_elapsed >= frame_duration {
             self.frame_elapsed -= frame_duration;
-            self.frame_index = (self.frame_index + 1) % FRAME_COUNT;
+            self.frame_index = (self.frame_index + 1) % frame_count;
         }
     }
 
@@ -440,6 +448,38 @@ impl PetRuntime {
         };
         let divisor = self.hover_intensity.max(0.5);
         Duration::from_millis((base_ms / divisor).round() as u64)
+    }
+
+    #[cfg(test)]
+    pub fn new_with_manifest_for_test(manifest: PetManifest, seed: u64) -> Self {
+        let direction = if seed % 2 == 0 {
+            Direction::Right
+        } else {
+            Direction::Left
+        };
+
+        Self {
+            state: PetState::Idle,
+            direction,
+            frame_index: 0,
+            frame_elapsed: Duration::ZERO,
+            state_elapsed: Duration::ZERO,
+            walk_distance_remaining: 0.0,
+            completed_walk_cycles: 0,
+            personality: Personality::Cheerful,
+            behavior_mode: BehaviorMode::Default,
+            expression_index: 0,
+            expression_elapsed: Duration::ZERO,
+            movement_speed_multiplier: 1.0,
+            hover_intensity: 1.0,
+            action_override: None,
+            hovered: false,
+            dragging: false,
+            hidden: false,
+            intent: BehaviorIntent::Idle,
+            manifest,
+            current_animation_name: "idle".to_string(),
+        }
     }
 
     #[cfg(test)]
@@ -925,5 +965,46 @@ mod tests {
         assert_eq!(pet.frame_index(), 0);
         pet.tick(Duration::from_millis(1));
         assert_eq!(pet.frame_index(), 1);
+    }
+
+    #[test]
+    fn advance_animation_wraps_at_manifest_frame_count_not_fixed_constant() {
+        use crate::pet::manifest::{Animation, FrameGeometry, PetManifest};
+        use std::collections::BTreeMap;
+
+        // Fixture manifest where "idle" has 6 frames (more than the legacy FRAME_COUNT=4).
+        let mut animations = BTreeMap::new();
+        animations.insert(
+            "idle".to_string(),
+            Animation {
+                frames: vec![0, 1, 2, 3, 4, 5],
+            },
+        );
+        let manifest = PetManifest {
+            manifest_version: 1,
+            id: "fixture".into(),
+            display_name: "Fixture".into(),
+            spritesheet_path: "x.png".into(),
+            frame: FrameGeometry {
+                width: 16,
+                height: 16,
+                columns: 6,
+                rows: 1,
+            },
+            animations,
+        };
+        let mut pet = PetRuntime::new_with_manifest_for_test(manifest, 0);
+
+        // Tick 5 idle frames (200ms each). frame_index should land at 5.
+        for _ in 0..5 {
+            pet.tick(Duration::from_millis(200));
+        }
+        assert_eq!(pet.frame_index(), 5);
+        assert_eq!(pet.current_sprite_index(), 5);
+
+        // One more tick wraps back to 0.
+        pet.tick(Duration::from_millis(200));
+        assert_eq!(pet.frame_index(), 0);
+        assert_eq!(pet.current_sprite_index(), 0);
     }
 }
