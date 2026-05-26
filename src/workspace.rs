@@ -221,17 +221,11 @@ impl WorkspaceObserver {
             return;
         }
         self.prompted_for_accessibility_at_startup = true;
-        #[cfg(target_os = "macos")]
-        {
-            // Real AXIsProcessTrustedWithOptions call lands in Task 15.
-        }
+        let _ = macos_polling::ax_request_prompt();
     }
 
     pub fn request_accessibility_now(&mut self) {
-        #[cfg(target_os = "macos")]
-        {
-            // Real AXIsProcessTrustedWithOptions call lands in Task 15.
-        }
+        let _ = macos_polling::ax_request_prompt();
     }
 }
 
@@ -428,9 +422,10 @@ mod macos_polling {
     }
 
     use objc2_application_services::{
-        kAXValueCGRectType, AXIsProcessTrusted, AXUIElement, AXValue,
+        kAXTrustedCheckOptionPrompt, kAXValueCGRectType, AXIsProcessTrusted,
+        AXIsProcessTrustedWithOptions, AXUIElement, AXValue,
     };
-    use objc2_core_foundation::CFType;
+    use objc2_core_foundation::{kCFBooleanTrue, CFMutableDictionary, CFType};
 
     /// Returns true if this process is trusted for the Accessibility API (System
     /// Settings → Privacy & Security → Accessibility). The call is cheap and safe
@@ -440,6 +435,67 @@ mod macos_polling {
         // returning the bool. The free-function form is marked `unsafe` only
         // because all extern-C wrappers in the crate are.
         unsafe { AXIsProcessTrusted() }
+    }
+
+    /// Calls `AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: true})`
+    /// to show the system Accessibility prompt asynchronously when the process is
+    /// not trusted. The return value mirrors `AXIsProcessTrusted()` and does not
+    /// reflect the user's eventual response; we discard it at the call site.
+    ///
+    /// Implementation notes / deviations from the plan draft:
+    /// - `objc2-core-foundation 0.3.2` does not expose
+    ///   `CFDictionary::from_pairs` or a `CFBoolean::true_value()` helper. We
+    ///   build the options dict via `CFMutableDictionary::new` with the standard
+    ///   type-aware key/value callbacks, then `add_value` with the global
+    ///   `kCFBooleanTrue` static.
+    /// - `kAXTrustedCheckOptionPrompt` *is* exported as a `pub static
+    ///   &'static CFString` under the `HIServices` feature, so we use the named
+    ///   constant rather than the literal-string fallback.
+    pub fn ax_request_prompt() -> bool {
+        use objc2_core_foundation::{
+            kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks,
+        };
+        use std::ffi::c_void;
+
+        // SAFETY: passing standard CFType callbacks for keys and values
+        // matches the dictionary contents we build below (CFString key,
+        // CFBoolean value). NULL allocator => default CFAllocator.
+        let dict = unsafe {
+            CFMutableDictionary::new(
+                None,
+                1,
+                &raw const kCFTypeDictionaryKeyCallBacks,
+                &raw const kCFTypeDictionaryValueCallBacks,
+            )
+        };
+        let Some(dict) = dict else {
+            // Allocation failure is exceedingly rare; treat the same as the
+            // trust check returning false (which is what the OS would say
+            // without options anyway).
+            return false;
+        };
+
+        // SAFETY: kAXTrustedCheckOptionPrompt and kCFBooleanTrue are
+        // process-lifetime statics owned by the system frameworks. Both
+        // pointers stay valid for the entire AXIsProcessTrustedWithOptions
+        // call. CFType callbacks will retain them.
+        unsafe {
+            let key_ptr: *const c_void = (kAXTrustedCheckOptionPrompt
+                as *const objc2_core_foundation::CFString)
+                .cast();
+            // kCFBooleanTrue is Option<&'static CFBoolean>; on macOS it is
+            // always Some, but we guard for completeness.
+            let Some(value) = kCFBooleanTrue else {
+                return false;
+            };
+            let value_ptr: *const c_void =
+                (value as *const objc2_core_foundation::CFBoolean).cast();
+            CFMutableDictionary::add_value(Some(&dict), key_ptr, value_ptr);
+        }
+
+        // SAFETY: `dict` is a valid immutable view of our newly-built
+        // CFMutableDictionary; AX only reads from it.
+        unsafe { AXIsProcessTrustedWithOptions(Some(dict.as_opaque())) }
     }
 
     /// Best-effort caret bounding rect from the system-wide focused UI element,
@@ -567,6 +623,7 @@ mod macos_polling {
     pub fn any_fullscreen_on(_active_bounds: PetRect, _our_pid: i32) -> bool { false }
     pub fn is_ax_trusted() -> bool { true }
     pub fn caret_rect_quartz() -> Option<PetRect> { None }
+    pub fn ax_request_prompt() -> bool { true }
 }
 
 /// Bundle identifiers we consider "editors" for the purpose of marking the user busy.
@@ -744,5 +801,23 @@ mod tests {
     fn editor_matcher_rejects_unrelated_substring() {
         assert!(!is_editor_bundle_id("com.example.notxcode"));
         assert!(!is_editor_bundle_id(""));
+    }
+
+    #[test]
+    fn startup_prompt_is_no_op_when_disabled() {
+        let mut o = WorkspaceObserver::new();
+        o.request_accessibility_on_startup_if_enabled(false);
+        // Verify the gate flag does not flip (no AX call made).
+        assert!(!o.prompted_for_accessibility_at_startup);
+    }
+
+    #[test]
+    fn startup_prompt_flips_flag_after_first_call_when_enabled() {
+        let mut o = WorkspaceObserver::new();
+        o.request_accessibility_on_startup_if_enabled(true);
+        assert!(o.prompted_for_accessibility_at_startup);
+        // Second call returns immediately (the latch is set).
+        o.request_accessibility_on_startup_if_enabled(true);
+        assert!(o.prompted_for_accessibility_at_startup);
     }
 }
