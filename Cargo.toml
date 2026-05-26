@@ -21,10 +21,13 @@ objc2-app-kit = { version = "0.3", features = [
   "NSApplication",
   "NSButton",
   "NSControl",
+  "NSEvent",
   "NSMenu",
   "NSMenuItem",
   "NSPanel",
   "NSResponder",
+  "NSRunningApplication",
+  "NSScreen",
   "NSSegmentedControl",
   "NSSlider",
   "NSStackView",
@@ -34,9 +37,24 @@ objc2-app-kit = { version = "0.3", features = [
   "NSView",
   "NSWindow",
   "NSWindowController",
+  "NSWorkspace",
   "objc2-core-foundation",
 ] }
 objc2-foundation = "0.3"
+objc2-core-graphics = { version = "0.3", features = [
+  "CGEventSource",
+  "CGEventTypes",
+  "CGGeometry",
+  "CGWindow",
+] }
+objc2-application-services = { version = "0.3", features = [
+  "AXAttributeConstants",
+  "AXError",
+  "AXUIElement",
+  "AXValue",
+  "AXValueConstants",
+  "HIServices",
+] }
 
 [profile.release]
 opt-level = 3
