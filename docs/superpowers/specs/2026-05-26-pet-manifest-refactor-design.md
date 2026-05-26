@@ -1,7 +1,7 @@
 # Pet Manifest Refactor — Sub-project 1 Design
 
 **Date:** 2026-05-26
-**Status:** Draft for review (revision 2)
+**Status:** Draft for review (revision 3)
 **Owner:** Tat Tran
 
 ## Context
@@ -379,8 +379,34 @@ pub fn current_animation_name(&self) -> &str {
 ### `sprite.rs`
 
 - Delete: `SpriteRow` enum, `EXPECTED_COLUMNS`, `EXPECTED_ROWS`, `impl From<AnimationGroup> for SpriteRow`.
-- Replace `SpriteSheet::frame_rect(SpriteRow, frame_index)` with `frame_rect(sprite_index: u32, geometry: &FrameGeometry) -> FrameRect`.
-- `SpriteSheet::load`/`from_image` takes `&FrameGeometry` instead of `frame_size: u32`. Validation: image width == `geometry.columns * geometry.width`, height == `geometry.rows * geometry.height`.
+- Delete: `SpriteSheet::frame_count()` and `SpriteSheet::row_count()` — they were backed by the deleted grid constants. Their single call site is the test `accepts_ten_rows_and_four_columns_for_happy_cappy` (sprite.rs:181) which is replaced by new geometry tests listed in the Testing section.
+- Store geometry inside `SpriteSheet`:
+  ```rust
+  pub struct SpriteSheet {
+      image: RgbaImage,
+      geometry: FrameGeometry,    // was: frame_size: u32
+  }
+  impl SpriteSheet {
+      pub fn geometry(&self) -> &FrameGeometry { &self.geometry }
+      pub fn image(&self) -> &RgbaImage { &self.image }
+      // frame_count() and row_count() removed.
+  }
+  ```
+- Replace `SpriteSheet::frame_rect(SpriteRow, frame_index)` with `frame_rect(sprite_index: u32) -> FrameRect` — the geometry now lives on the sheet, so callers don't pass it. Internal implementation uses `self.geometry`:
+  ```rust
+  pub fn frame_rect(&self, sprite_index: u32) -> FrameRect {
+      let row = sprite_index / self.geometry.columns;
+      let col = sprite_index % self.geometry.columns;
+      FrameRect {
+          x: col * self.geometry.width,
+          y: row * self.geometry.height,
+          width: self.geometry.width,
+          height: self.geometry.height,
+      }
+  }
+  ```
+- `SpriteSheet::load(path, &FrameGeometry)` and `SpriteSheet::from_image(image, &FrameGeometry)` take a geometry reference. Validation: image width == `geometry.columns * geometry.width`, height == `geometry.rows * geometry.height`. Reject if `geometry.columns == 0` or `geometry.rows == 0` (already enforced by manifest validation, but defense-in-depth for callers that construct `FrameGeometry` directly).
+- Both call sites in `app.rs` change to `sprite_sheet.frame_rect(sprite_index)` (no geometry argument needed). The `geometry` local in the `draw()` and `current_sprite_hit_test()` snippets above is unused after this simplification — remove it from those snippets.
 
 ```rust
 pub fn frame_rect(&self, sprite_index: u32, geometry: &FrameGeometry) -> FrameRect {
@@ -399,17 +425,87 @@ pub fn frame_rect(&self, sprite_index: u32, geometry: &FrameGeometry) -> FrameRe
 
 - `pet: Pet` → `pet: PetRuntime`.
 - `Pet::new_with_seed(seed)` → `PetRuntime::new(manifest, seed)` where `manifest = PetManifest::load_embedded_happy_cappy()`.
-- `FRAME_SIZE: u32 = 64` constant removed; window sizing reads from `runtime.manifest().frame.width`.
-- Per-frame draw:
-  ```rust
-  let geometry = runtime.manifest().frame;
-  let sprite_index = runtime.current_sprite_index();
-  let rect = sprite_sheet.frame_rect(sprite_index, &geometry);
-  let flip_x = runtime.current_animation_name() == "walk-right"
-      && runtime.direction() == Direction::Left;
-  renderer.draw(sprite_sheet.image(), rect, flip_x)?;
-  ```
-- Hit-test code in `interaction.rs` already uses the same `flip_x` logic chain — the `walk-right` name check replaces the `AnimationGroup::WalkRight` check, byte-for-byte equivalent.
+
+**FRAME_SIZE / WINDOW_SIZE replacement plan**
+
+The constants at `src/app.rs:29-31` participate in seven call sites. Replace with the following:
+
+```rust
+// Keep — WINDOW_SCALE is a display preference, not a pet attribute.
+pub const WINDOW_SCALE: u32 = 2;
+
+// Remove — frame dimensions now come from the loaded manifest.
+// pub const FRAME_SIZE: u32 = 64;
+// pub const WINDOW_SIZE: u32 = FRAME_SIZE * WINDOW_SCALE;
+```
+
+Add an accessor on `PetRuntime` returning frame dimensions (allowing future rectangular sprites):
+
+```rust
+impl PetRuntime {
+    pub fn frame_size(&self) -> (u32, u32) {
+        (self.manifest.frame.width, self.manifest.frame.height)
+    }
+}
+```
+
+Patch each `app.rs` call site:
+
+| Line | Old | New |
+|---|---|---|
+| 150 (window inner_size) | `LogicalSize::new(WINDOW_SIZE as f64, WINDOW_SIZE as f64)` | `let (fw, fh) = pet.frame_size();` then `LogicalSize::new((fw * WINDOW_SCALE) as f64, (fh * WINDOW_SCALE) as f64)` |
+| 185-186 (PetRenderer::new buffer) | `FRAME_SIZE, FRAME_SIZE` | `pet.frame_size().0, pet.frame_size().1` |
+| 215 (SpriteSheet::load) | `SpriteSheet::load(&paths.sprite_sheet, FRAME_SIZE)` | `SpriteSheet::load(&paths.sprite_sheet, &pet.manifest().frame)` |
+| 356-357 (physics size from scale) | `x: FRAME_SIZE as f32 * settings.scale, y: FRAME_SIZE as f32 * settings.scale` | `x: fw as f32 * settings.scale, y: fh as f32 * settings.scale` |
+| 860-861 (default physics fallback) | `x: WINDOW_SIZE as f32, y: WINDOW_SIZE as f32` | `x: (fw * WINDOW_SCALE) as f32, y: (fh * WINDOW_SCALE) as f32` |
+| 1228-1229 (test fixture max-scale size) | `x: FRAME_SIZE as f32 * AppSettings::MAX_SCALE, y: ...` | `x: 64.0 * AppSettings::MAX_SCALE, y: 64.0 * AppSettings::MAX_SCALE` — test inlines the known happy-cappy frame size |
+
+For the bundled happy-cappy manifest (width=64, height=64), every numeric computation produces identical values to today. Tests asserting hardcoded pixel counts remain valid.
+
+**`draw()` (currently `src/app.rs:729-749`)**
+
+```rust
+fn draw(&mut self) {
+    if !self.pet_visible { return; }
+    let (Some(renderer), Some(sprite_sheet)) =
+        (self.renderer.as_mut(), self.sprite_sheet.as_ref()) else { return; };
+
+    let sprite_index = self.pet.current_sprite_index();
+    let flip_x = self.pet.current_animation_name() == "walk-right"
+        && self.pet.direction() == Direction::Left;
+    let rect = sprite_sheet.frame_rect(sprite_index);
+
+    if let Err(error) = renderer.draw(sprite_sheet.image(), rect, flip_x) {
+        warn!("failed to draw desktop pet frame: {error}");
+    }
+}
+```
+
+**`current_sprite_hit_test()` (currently `src/app.rs:759-777`)**
+
+```rust
+fn current_sprite_hit_test(&self, point: Vec2) -> bool {
+    let Some(sprite_sheet) = &self.sprite_sheet else { return false; };
+
+    let sprite_index = self.pet.current_sprite_index();
+    let rect = sprite_sheet.frame_rect(sprite_index);
+
+    let scale = if self.settings.scale.is_finite() && self.settings.scale > 0.0 {
+        self.settings.scale
+    } else {
+        AppSettings::MIN_SCALE
+    };
+    let scaled_point = Vec2 { x: point.x / scale, y: point.y / scale };
+
+    let flip_x = self.pet.current_animation_name() == "walk-right"
+        && self.pet.direction() == Direction::Left;
+    alpha_hit_test_with_flip(sprite_sheet.image(), rect, scaled_point, flip_x)
+}
+```
+
+Both `draw()` and `current_sprite_hit_test()` drop `current_animation_group()`, `SpriteRow::from(group)`, and the `AnimationGroup::WalkRight` flip check in lockstep. They are the only two paths that consume `AnimationGroup` in `app.rs`.
+
+`src/interaction.rs` operates on `InteractionState` + raw mouse events and does not reference `AnimationGroup` — unaffected by the refactor.
 
 ## Testing
 
