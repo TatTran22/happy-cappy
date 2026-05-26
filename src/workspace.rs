@@ -187,6 +187,14 @@ impl WorkspaceObserver {
             }
         };
 
+        let cursor_pos = if let Some(display) = self.active_display.as_ref() {
+            let (cx, cy_cocoa) = macos_polling::cursor_cocoa_location();
+            let cy_quartz = cocoa_to_quartz_y(cy_cocoa, display.primary_display_height);
+            crate::physics::Vec2 { x: cx, y: cy_quartz }
+        } else {
+            self.last_snapshot.cursor_pos
+        };
+
         self.last_snapshot = WorkspaceSnapshot {
             workspace_available: cfg!(target_os = "macos"),
             seconds_idle,
@@ -195,8 +203,7 @@ impl WorkspaceObserver {
             frontmost_is_editor,
             fullscreen_active,
             caret_rect,
-            // cursor_pos is populated in a later task.
-            cursor_pos: self.last_snapshot.cursor_pos,
+            cursor_pos,
         };
 
         let now_trusted = self.is_accessibility_trusted();
@@ -237,8 +244,21 @@ impl Default for WorkspaceObserver {
 
 #[cfg(target_os = "macos")]
 mod macos_polling {
-    use objc2_app_kit::NSWorkspace;
+    use objc2_app_kit::{NSEvent, NSWorkspace};
     use objc2_core_graphics::{CGEventSource, CGEventSourceStateID, CGEventType};
+
+    /// Current mouse pointer location in Cocoa global coordinates
+    /// (origin = primary display bottom-left, Y up). Caller is responsible for
+    /// Y-flipping to Quartz space via `cocoa_to_quartz_y` if needed.
+    ///
+    /// `NSEvent::mouseLocation` is a class method that reads the live cursor
+    /// position regardless of whether any event has been dispatched, so it's
+    /// safe to poll every tick. In objc2-app-kit 0.3 the wrapper is exposed as
+    /// a safe `pub fn` (no `unsafe` block required).
+    pub fn cursor_cocoa_location() -> (f32, f32) {
+        let p = NSEvent::mouseLocation();
+        (p.x as f32, p.y as f32)
+    }
 
     /// kCGAnyInputEventType in C is `~0u32` (0xFFFFFFFF). The objc2-core-graphics
     /// crate doesn't expose a named constant for it (the same raw value is reused
@@ -624,6 +644,7 @@ mod macos_polling {
     pub fn is_ax_trusted() -> bool { true }
     pub fn caret_rect_quartz() -> Option<PetRect> { None }
     pub fn ax_request_prompt() -> bool { true }
+    pub fn cursor_cocoa_location() -> (f32, f32) { (0.0, 0.0) }
 }
 
 /// Bundle identifiers we consider "editors" for the purpose of marking the user busy.
