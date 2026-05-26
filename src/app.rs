@@ -170,6 +170,8 @@ impl DesktopPetApp {
         self.settings.monitor_behavior = settings.monitor_behavior;
         self.update_bounds_from_window(event_loop);
         self.apply_settings(settings);
+        self.workspace_observer
+            .request_accessibility_on_startup_if_enabled(self.settings.avoid_text_cursor);
         if !self.pet_visible {
             window.set_visible(false);
         }
