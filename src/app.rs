@@ -866,6 +866,53 @@ impl ApplicationHandler<AppCommand> for DesktopPetApp {
     }
 }
 
+pub fn decide_intent(
+    snapshot: &crate::workspace::WorkspaceSnapshot,
+    settings: &crate::settings::AppSettings,
+    pet_frame: crate::physics::Rect,
+) -> crate::pet::BehaviorIntent {
+    use crate::pet::{BehaviorIntent, Direction};
+
+    let pet_center_x = (pet_frame.min.x + pet_frame.max.x) * 0.5;
+
+    if settings.avoid_text_cursor {
+        if let Some(caret) = snapshot.caret_rect {
+            if caret.intersects(&pet_frame) {
+                // Pick the side of the caret rect that's closer to the pet center.
+                let exit_left_dx = (pet_center_x - caret.min.x).abs();
+                let exit_right_dx = (caret.max.x - pet_center_x).abs();
+                let direction = if exit_left_dx < exit_right_dx {
+                    Direction::Left
+                } else {
+                    Direction::Right
+                };
+                return BehaviorIntent::AvoidRectHorizontal { direction };
+            }
+        }
+    }
+
+    if settings.follow_cursor_when_idle {
+        if snapshot.is_idle() {
+            let direction = if snapshot.cursor_pos.x > pet_center_x {
+                Direction::Right
+            } else {
+                Direction::Left
+            };
+            return BehaviorIntent::ChaseHorizontal { direction };
+        }
+        if snapshot.is_busy() {
+            let direction = if snapshot.cursor_pos.x > pet_center_x {
+                Direction::Left
+            } else {
+                Direction::Right
+            };
+            return BehaviorIntent::AvoidHorizontal { direction };
+        }
+    }
+
+    BehaviorIntent::Idle
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1189,5 +1236,105 @@ mod tests {
                 display_name: None,
             })
         );
+    }
+}
+
+#[cfg(test)]
+mod decide_intent_tests {
+    use super::*;
+    use crate::pet::{BehaviorIntent, Direction};
+    use crate::physics::{Rect, Vec2};
+    use crate::settings::AppSettings;
+    use crate::workspace::WorkspaceSnapshot;
+
+    fn settings_all_on() -> AppSettings {
+        let mut s = AppSettings::default();
+        s.follow_cursor_when_idle = true;
+        s.avoid_text_cursor = true;
+        s.hide_on_fullscreen = true;
+        s
+    }
+
+    fn snap(idle: f32, cursor_x: f32, caret: Option<Rect>) -> WorkspaceSnapshot {
+        WorkspaceSnapshot {
+            workspace_available: true,
+            seconds_idle: idle,
+            typing_rate_per_sec: 0.0,
+            frontmost_bundle_id: None,
+            frontmost_is_editor: false,
+            caret_rect: caret,
+            fullscreen_active: false,
+            cursor_pos: Vec2 { x: cursor_x, y: 0.0 },
+        }
+    }
+
+    fn pet_frame_at(x: f32) -> Rect {
+        Rect {
+            min: Vec2 { x, y: 0.0 },
+            max: Vec2 { x: x + 100.0, y: 100.0 },
+        }
+    }
+
+    #[test]
+    fn idle_when_no_signals() {
+        let settings = settings_all_on();
+        let intent = decide_intent(&snap(3.5, 50.0, None), &settings, pet_frame_at(0.0));
+        assert_eq!(intent, BehaviorIntent::Idle);
+    }
+
+    #[test]
+    fn chase_right_when_idle_and_cursor_to_right() {
+        let intent = decide_intent(&snap(6.0, 1000.0, None), &settings_all_on(), pet_frame_at(0.0));
+        assert_eq!(intent, BehaviorIntent::ChaseHorizontal { direction: Direction::Right });
+    }
+
+    #[test]
+    fn chase_left_when_idle_and_cursor_to_left() {
+        let intent = decide_intent(&snap(6.0, -50.0, None), &settings_all_on(), pet_frame_at(0.0));
+        assert_eq!(intent, BehaviorIntent::ChaseHorizontal { direction: Direction::Left });
+    }
+
+    #[test]
+    fn avoid_horizontal_when_busy_and_cursor_to_right() {
+        // seconds_idle < 2.0 → busy
+        let intent = decide_intent(&snap(0.5, 1000.0, None), &settings_all_on(), pet_frame_at(0.0));
+        assert_eq!(intent, BehaviorIntent::AvoidHorizontal { direction: Direction::Left });
+    }
+
+    #[test]
+    fn avoid_rect_overrides_chase_when_caret_intersects_pet() {
+        let caret = Rect {
+            min: Vec2 { x: 60.0, y: 40.0 },
+            max: Vec2 { x: 120.0, y: 60.0 },
+        };
+        let intent = decide_intent(&snap(6.0, 1000.0, Some(caret)), &settings_all_on(), pet_frame_at(50.0));
+        match intent {
+            BehaviorIntent::AvoidRectHorizontal { .. } => {}
+            other => panic!("expected AvoidRectHorizontal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn caret_rect_not_intersecting_does_not_trigger_avoid_rect() {
+        let caret = Rect {
+            min: Vec2 { x: 500.0, y: 40.0 },
+            max: Vec2 { x: 560.0, y: 60.0 },
+        };
+        // Idle and cursor to right; AvoidRect should NOT fire since rect is far away.
+        let intent = decide_intent(&snap(6.0, 1000.0, Some(caret)), &settings_all_on(), pet_frame_at(0.0));
+        assert_eq!(intent, BehaviorIntent::ChaseHorizontal { direction: Direction::Right });
+    }
+
+    #[test]
+    fn all_gates_off_returns_idle() {
+        let mut settings = settings_all_on();
+        settings.follow_cursor_when_idle = false;
+        settings.avoid_text_cursor = false;
+        let caret = Rect {
+            min: Vec2 { x: 60.0, y: 40.0 },
+            max: Vec2 { x: 120.0, y: 60.0 },
+        };
+        let intent = decide_intent(&snap(6.0, 1000.0, Some(caret)), &settings, pet_frame_at(50.0));
+        assert_eq!(intent, BehaviorIntent::Idle);
     }
 }
