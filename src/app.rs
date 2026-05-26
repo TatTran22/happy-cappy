@@ -78,6 +78,7 @@ pub struct DesktopPetApp {
     interaction: InteractionState,
     last_cursor_local_position: Option<Vec2>,
     last_cursor_screen_position: Option<Vec2>,
+    workspace_observer: crate::workspace::WorkspaceObserver,
     #[cfg(not(test))]
     event_proxy: EventLoopProxy<AppCommand>,
     #[cfg(test)]
@@ -107,6 +108,7 @@ impl DesktopPetApp {
             interaction: InteractionState::default(),
             last_cursor_local_position: None,
             last_cursor_screen_position: None,
+            workspace_observer: crate::workspace::WorkspaceObserver::new(),
             #[cfg(not(test))]
             event_proxy,
             #[cfg(test)]
@@ -137,6 +139,7 @@ impl DesktopPetApp {
             interaction: InteractionState::default(),
             last_cursor_local_position: None,
             last_cursor_screen_position: None,
+            workspace_observer: crate::workspace::WorkspaceObserver::new(),
             event_proxy,
         }
     }
@@ -249,8 +252,22 @@ impl DesktopPetApp {
                 max_x: (position.x as f32 + size.width as f32) / scale_factor,
                 max_y: (position.y as f32 + size.height as f32) / scale_factor,
             };
+
+            // Keep the workspace observer's active-display info in lockstep with physics bounds.
+            let primary_height = event_loop
+                .primary_monitor()
+                .map(|m| (m.size().height as f32) / (m.scale_factor() as f32))
+                .unwrap_or(0.0);
+            self.workspace_observer
+                .set_active_display(Some(crate::workspace::DisplayInfo {
+                    name: monitor.name(),
+                    bounds_logical: self.physics.bounds.into(),
+                    scale_factor,
+                    primary_display_height: primary_height,
+                }));
         } else {
             self.active_monitor_name = None;
+            self.workspace_observer.set_active_display(None);
         }
 
         self.physics.clamp_to_bounds();
@@ -265,6 +282,33 @@ impl DesktopPetApp {
         let dt = now.duration_since(self.last_tick).min(MAX_TICK_DELTA);
         self.last_tick = now;
 
+        // Poll workspace state. Owned WorkspaceTick releases the &mut observer borrow,
+        // letting us call &mut self methods (sync_settings_window, set_auto_hidden) below.
+        let workspace_tick = self.workspace_observer.tick(now);
+        let snapshot = workspace_tick.snapshot;
+
+        // If AX trust changed, refresh the Settings UI label.
+        if workspace_tick.trust_changed {
+            self.sync_settings_window();
+        }
+
+        // Decide pet behavior intent based on observation + settings + current pet frame.
+        let pet_frame = crate::physics::Rect {
+            min: self.physics.position,
+            max: crate::physics::Vec2 {
+                x: self.physics.position.x + self.physics.size.x,
+                y: self.physics.position.y + self.physics.size.y,
+            },
+        };
+        let intent = decide_intent(&snapshot, &self.settings, pet_frame);
+        self.pet.set_intent(intent);
+
+        // Drive fullscreen auto-hide.
+        let should_auto_hide = self.settings.hide_on_fullscreen && snapshot.fullscreen_active;
+        if should_auto_hide != self.auto_hidden {
+            self.set_auto_hidden(should_auto_hide);
+        }
+
         let tick = self.pet.tick(dt);
         self.physics.velocity.x = tick.speed_x;
         let physics_step = self.physics.update(dt.as_secs_f32());
@@ -272,7 +316,9 @@ impl DesktopPetApp {
             self.pet.turn_around();
         }
         self.move_window_to_pet();
-        window.request_redraw();
+        if self.effective_window_visible() {
+            window.request_redraw();
+        }
     }
 
     fn move_window_to_pet(&self) {
@@ -933,7 +979,6 @@ impl ApplicationHandler<AppCommand> for DesktopPetApp {
     }
 }
 
-#[allow(dead_code)] // Wired into the tick loop in Task 20.
 pub(crate) fn decide_intent(
     snapshot: &crate::workspace::WorkspaceSnapshot,
     settings: &crate::settings::AppSettings,
