@@ -25,8 +25,9 @@ impl SettingsWindowController {
 mod macos {
     use objc2::{rc::Retained, runtime::AnyObject, MainThreadOnly};
     use objc2_app_kit::{
-        NSBackingStoreType, NSButton, NSFloatingWindowLevel, NSPanel, NSSegmentSwitchTracking,
-        NSSegmentedControl, NSSlider, NSTextField, NSView, NSWindowStyleMask,
+        NSBackingStoreType, NSButton, NSButtonType, NSControlStateValueOff, NSControlStateValueOn,
+        NSFloatingWindowLevel, NSPanel, NSSegmentSwitchTracking, NSSegmentedControl, NSSlider,
+        NSTextField, NSView, NSWindowStyleMask,
     };
     use objc2_foundation::{
         ns_string, MainThreadMarker, NSInteger, NSPoint, NSRect, NSSize, NSString,
@@ -37,7 +38,8 @@ mod macos {
         app::AppCommand,
         command_target_macos::CommandTarget,
         menu_bar::{
-            MENU_TAG_FOCUS_MODE, MENU_TAG_HOVER_INTENSITY, MENU_TAG_MONITOR_BEHAVIOR,
+            MENU_TAG_AVOID_TEXT_CURSOR, MENU_TAG_FOCUS_MODE, MENU_TAG_FOLLOW_CURSOR_WHEN_IDLE,
+            MENU_TAG_HIDE_ON_FULLSCREEN, MENU_TAG_HOVER_INTENSITY, MENU_TAG_MONITOR_BEHAVIOR,
             MENU_TAG_MOVEMENT_SPEED, MENU_TAG_PERSONALITY, MENU_TAG_QUIT, MENU_TAG_RESET,
             MENU_TAG_SCALE, MENU_TAG_SHOW_HIDE,
         },
@@ -57,6 +59,13 @@ mod macos {
         panel: Retained<NSPanel>,
         show_hide_button: Retained<NSButton>,
         focus_mode_button: Retained<NSButton>,
+        // Read in Task 26 (sync_settings) and Task 27 (event dispatch).
+        #[allow(dead_code)]
+        follow_cursor_when_idle_button: Retained<NSButton>,
+        #[allow(dead_code)]
+        avoid_text_cursor_button: Retained<NSButton>,
+        #[allow(dead_code)]
+        hide_on_fullscreen_button: Retained<NSButton>,
         _target: Retained<CommandTarget>,
     }
 
@@ -132,6 +141,11 @@ mod macos {
                 settings.pet_visible,
                 settings.focus_mode,
             );
+            let (
+                follow_cursor_when_idle_button,
+                avoid_text_cursor_button,
+                hide_on_fullscreen_button,
+            ) = add_workspace_section(&content_view, mtm, target_object, settings);
 
             panel.center();
 
@@ -139,6 +153,9 @@ mod macos {
                 panel,
                 show_hide_button,
                 focus_mode_button,
+                follow_cursor_when_idle_button,
+                avoid_text_cursor_button,
+                hide_on_fullscreen_button,
                 _target: target,
             })
         }
@@ -346,6 +363,80 @@ mod macos {
         let label = NSTextField::labelWithString(text, mtm);
         label.setFrame(rect(MARGIN_X, y, LABEL_WIDTH, ROW_HEIGHT));
         content_view.addSubview(&label);
+    }
+
+    fn add_workspace_section(
+        content_view: &NSView,
+        mtm: MainThreadMarker,
+        target_object: &AnyObject,
+        settings: &AppSettings,
+    ) -> (Retained<NSButton>, Retained<NSButton>, Retained<NSButton>) {
+        let heading = NSTextField::labelWithString(ns_string!("Workspace Awareness"), mtm);
+        heading.setFrame(rect(
+            MARGIN_X,
+            190.0,
+            PANEL_WIDTH - (MARGIN_X * 2.0),
+            22.0,
+        ));
+        content_view.addSubview(&heading);
+
+        let follow = add_checkbox(
+            content_view,
+            mtm,
+            ns_string!("Follow cursor when idle"),
+            158.0,
+            MENU_TAG_FOLLOW_CURSOR_WHEN_IDLE,
+            settings.follow_cursor_when_idle,
+            target_object,
+        );
+        let avoid = add_checkbox(
+            content_view,
+            mtm,
+            ns_string!("Avoid text-cursor area"),
+            128.0,
+            MENU_TAG_AVOID_TEXT_CURSOR,
+            settings.avoid_text_cursor,
+            target_object,
+        );
+        let hide = add_checkbox(
+            content_view,
+            mtm,
+            ns_string!("Auto-hide when any app is fullscreen"),
+            98.0,
+            MENU_TAG_HIDE_ON_FULLSCREEN,
+            settings.hide_on_fullscreen,
+            target_object,
+        );
+        (follow, avoid, hide)
+    }
+
+    fn add_checkbox(
+        content_view: &NSView,
+        mtm: MainThreadMarker,
+        title: &NSString,
+        y: f64,
+        tag: isize,
+        initial_state: bool,
+        target_object: &AnyObject,
+    ) -> Retained<NSButton> {
+        let button = NSButton::initWithFrame(
+            NSButton::alloc(mtm),
+            rect(MARGIN_X, y, PANEL_WIDTH - (MARGIN_X * 2.0), 22.0),
+        );
+        button.setTitle(title);
+        button.setTag(tag as NSInteger);
+        unsafe {
+            button.setButtonType(NSButtonType::Switch);
+            button.setState(if initial_state {
+                NSControlStateValueOn
+            } else {
+                NSControlStateValueOff
+            });
+            button.setTarget(Some(target_object));
+            button.setAction(Some(CommandTarget::settings_value_selector()));
+        }
+        content_view.addSubview(&button);
+        button
     }
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> NSRect {
