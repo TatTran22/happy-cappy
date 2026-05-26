@@ -372,18 +372,26 @@ impl DesktopPetApp {
         self.settings.pet_visible = visible;
         self.pet_visible = visible;
         self.pet.set_hidden(!visible);
-        if let Some(window) = &self.window {
-            window.set_visible(visible);
-            if visible {
-                window.request_redraw();
-            }
-        }
-        if visible {
-            self.next_tick_at = Instant::now();
-        }
+        self.apply_window_visibility();
         self.sync_settings_window();
         self.sync_menu_bar();
         self.save_settings();
+    }
+
+    pub fn set_auto_hidden(&mut self, hidden: bool) {
+        if hidden && self.interaction.is_dragging() {
+            let last_pointer = self
+                .last_cursor_screen_position
+                .unwrap_or(self.physics.position);
+            let events = self.interaction.mouse_released(
+                last_pointer,
+                MouseButtonKind::Left,
+                /*hit_visible_pixel=*/ false,
+            );
+            self.handle_interaction_events(events);
+        }
+        self.auto_hidden = hidden;
+        self.apply_window_visibility();
     }
 
     #[allow(dead_code)]
@@ -1304,6 +1312,31 @@ mod tests {
 
         app.auto_hidden = true;
         assert!(!app.effective_window_visible());
+    }
+
+    #[test]
+    fn set_auto_hidden_does_not_modify_settings() {
+        let mut app = DesktopPetApp::new_with_event_proxy(None);
+        app.settings.pet_visible = true;
+        app.set_auto_hidden(true);
+        assert!(app.settings.pet_visible, "auto-hide must not touch the persisted setting");
+        assert!(app.auto_hidden);
+    }
+
+    #[test]
+    fn set_auto_hidden_persistence_sequence() {
+        let mut app = DesktopPetApp::new_with_event_proxy(None);
+        app.pet_visible = true;
+        app.auto_hidden = false;
+
+        app.set_auto_hidden(true);
+        assert!(!app.effective_window_visible());
+
+        app.set_pet_visible(false);
+        assert!(!app.effective_window_visible());
+
+        app.set_auto_hidden(false);
+        assert!(!app.effective_window_visible(), "pet_visible drives the final result");
     }
 }
 
