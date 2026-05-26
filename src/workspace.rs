@@ -77,6 +77,10 @@ pub(crate) fn cocoa_to_quartz_y(cocoa_y: f32, primary_display_height: f32) -> f3
     primary_display_height - cocoa_y
 }
 
+fn fullscreen_active_from_poll_result(previous: bool, poll_result: Option<bool>) -> bool {
+    poll_result.unwrap_or(previous)
+}
+
 use std::time::Instant;
 
 pub struct WorkspaceObserver {
@@ -166,7 +170,10 @@ impl WorkspaceObserver {
                 (true, Some(display)) => {
                     self.last_fullscreen_poll_at = Some(now);
                     let pid = std::process::id() as i32;
-                    macos_polling::any_fullscreen_on(display.bounds_logical, pid)
+                    fullscreen_active_from_poll_result(
+                        self.last_snapshot.fullscreen_active,
+                        macos_polling::any_fullscreen_on(display.bounds_logical, pid),
+                    )
                 }
                 _ => self.last_snapshot.fullscreen_active,
             }
@@ -335,12 +342,9 @@ mod macos_polling {
     /// (own-app windows are unaffected). The pet does not request that permission, so
     /// in practice we accept this limitation as the "safe default" of leaving the pet
     /// visible when we can't confirm fullscreen.
-    pub fn any_fullscreen_on(active_bounds: PetRect, our_pid: i32) -> bool {
-        let Some(info) =
-            CGWindowListCopyWindowInfo(CGWindowListOption::OptionOnScreenOnly, kCGNullWindowID)
-        else {
-            return false;
-        };
+    pub fn any_fullscreen_on(active_bounds: PetRect, our_pid: i32) -> Option<bool> {
+        let info =
+            CGWindowListCopyWindowInfo(CGWindowListOption::OptionOnScreenOnly, kCGNullWindowID)?;
 
         let key_layer = CFString::from_static_str("kCGWindowLayer");
         let key_owner_pid = CFString::from_static_str("kCGWindowOwnerPID");
@@ -402,10 +406,10 @@ mod macos_polling {
                 },
             };
             if rects_equal_within(&win, &active_bounds, 1.0) {
-                return true;
+                return Some(true);
             }
         }
-        false
+        Some(false)
     }
 
     fn rects_equal_within(a: &PetRect, b: &PetRect, tol: f32) -> bool {
@@ -651,8 +655,8 @@ mod macos_polling {
     pub fn frontmost_bundle_id() -> Option<String> {
         None
     }
-    pub fn any_fullscreen_on(_active_bounds: PetRect, _our_pid: i32) -> bool {
-        false
+    pub fn any_fullscreen_on(_active_bounds: PetRect, _our_pid: i32) -> Option<bool> {
+        Some(false)
     }
     pub fn is_ax_trusted() -> bool {
         true
@@ -791,6 +795,14 @@ mod tests {
         assert!(!s.is_idle());
         assert!(!s.fullscreen_active);
         assert!(s.caret_rect.is_none());
+    }
+
+    #[test]
+    fn fullscreen_poll_failure_reuses_previous_state() {
+        assert!(fullscreen_active_from_poll_result(true, None));
+        assert!(!fullscreen_active_from_poll_result(false, None));
+        assert!(fullscreen_active_from_poll_result(false, Some(true)));
+        assert!(!fullscreen_active_from_poll_result(true, Some(false)));
     }
 
     #[test]
