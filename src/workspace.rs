@@ -14,11 +14,11 @@ pub struct WorkspaceSnapshot {
     pub typing_rate_per_sec: f32,
     pub frontmost_bundle_id: Option<String>,
     pub frontmost_is_editor: bool,
-    /// Pet-space points, top-left origin (see spec §Coordinate system).
+    /// Quartz/winit logical screen coordinates (primary display top-left origin, Y-down, points).
     pub caret_rect: Option<Rect>,
     /// On the pet's active display only.
     pub fullscreen_active: bool,
-    /// Pet-space points, top-left origin.
+    /// Quartz/winit logical screen coordinates (primary display top-left origin, Y-down, points).
     pub cursor_pos: Vec2,
 }
 
@@ -73,7 +73,7 @@ pub struct WorkspaceTick {
 /// two spaces. The pivot is the primary display's logical height, so this is correct for
 /// points on any secondary display, including displays with negative coordinates or
 /// vertical layouts — both spaces share the primary display as their anchor.
-pub fn cocoa_to_quartz_y(cocoa_y: f32, primary_display_height: f32) -> f32 {
+pub(crate) fn cocoa_to_quartz_y(cocoa_y: f32, primary_display_height: f32) -> f32 {
     primary_display_height - cocoa_y
 }
 
@@ -81,7 +81,7 @@ use std::time::Instant;
 
 pub struct WorkspaceObserver {
     last_known_ax_trusted: Option<bool>,
-    pub(crate) prompted_for_accessibility_at_startup: bool,
+    prompted_for_accessibility_at_startup: bool,
     active_display: Option<DisplayInfo>,
     last_snapshot: WorkspaceSnapshot,
     last_tick_at: Option<Instant>,
@@ -681,7 +681,7 @@ const EDITOR_BUNDLE_IDS: &[&str] = &[
     "com.jetbrains.*",
 ];
 
-pub fn is_editor_bundle_id(bundle_id: &str) -> bool {
+pub(crate) fn is_editor_bundle_id(bundle_id: &str) -> bool {
     EDITOR_BUNDLE_IDS.iter().any(|pattern| {
         if let Some(prefix) = pattern.strip_suffix('*') {
             bundle_id.starts_with(prefix)
