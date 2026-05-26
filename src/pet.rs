@@ -793,8 +793,15 @@ mod tests {
     #[test]
     fn set_intent_stores_intent() {
         let mut pet = Pet::new_with_seed(0);
-        pet.set_intent(BehaviorIntent::ChaseHorizontal { direction: Direction::Right });
-        assert_eq!(pet.intent(), BehaviorIntent::ChaseHorizontal { direction: Direction::Right });
+        pet.set_intent(BehaviorIntent::ChaseHorizontal {
+            direction: Direction::Right,
+        });
+        assert_eq!(
+            pet.intent(),
+            BehaviorIntent::ChaseHorizontal {
+                direction: Direction::Right
+            }
+        );
     }
 
     #[test]
@@ -810,7 +817,9 @@ mod tests {
         pet.tick(std::time::Duration::from_millis(0));
         assert_eq!(pet.state(), PetState::Idle);
 
-        pet.set_intent(BehaviorIntent::AvoidRectHorizontal { direction: Direction::Left });
+        pet.set_intent(BehaviorIntent::AvoidRectHorizontal {
+            direction: Direction::Left,
+        });
 
         assert_eq!(pet.state(), PetState::Walk);
         assert!(pet.tick(std::time::Duration::ZERO).speed_x < 0.0);
@@ -824,8 +833,14 @@ mod tests {
             pet.tick(std::time::Duration::from_millis(200));
         }
         // Pet is now mid-Walk going Right.
-        pet.set_intent(BehaviorIntent::AvoidRectHorizontal { direction: Direction::Left });
-        assert_eq!(pet.state(), PetState::Walk, "should stay in Walk, not re-enter");
+        pet.set_intent(BehaviorIntent::AvoidRectHorizontal {
+            direction: Direction::Left,
+        });
+        assert_eq!(
+            pet.state(),
+            PetState::Walk,
+            "should stay in Walk, not re-enter"
+        );
         assert!(
             pet.tick(std::time::Duration::ZERO).speed_x < 0.0,
             "direction should flip to Left immediately"
@@ -840,7 +855,9 @@ mod tests {
             pet.tick(std::time::Duration::from_millis(200));
         }
         // Pet is now mid-Walk going Right.
-        pet.set_intent(BehaviorIntent::ChaseHorizontal { direction: Direction::Left });
+        pet.set_intent(BehaviorIntent::ChaseHorizontal {
+            direction: Direction::Left,
+        });
         // ChaseHorizontal must NOT interrupt: direction stays Right within this walk segment.
         assert!(
             pet.tick(std::time::Duration::ZERO).speed_x > 0.0,

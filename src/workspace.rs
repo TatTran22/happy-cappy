@@ -142,9 +142,9 @@ impl WorkspaceObserver {
         self.last_key_counter = Some(key_counter);
 
         let (frontmost_bundle_id, frontmost_is_editor) = {
-            let due = self
-                .last_frontmost_poll_at
-                .is_none_or(|t| now.saturating_duration_since(t) >= std::time::Duration::from_millis(500));
+            let due = self.last_frontmost_poll_at.is_none_or(|t| {
+                now.saturating_duration_since(t) >= std::time::Duration::from_millis(500)
+            });
             if due {
                 let id = macos_polling::frontmost_bundle_id();
                 let is_editor = id.as_deref().is_some_and(is_editor_bundle_id);
@@ -159,9 +159,9 @@ impl WorkspaceObserver {
         };
 
         let fullscreen_active = {
-            let due = self
-                .last_fullscreen_poll_at
-                .is_none_or(|t| now.saturating_duration_since(t) >= std::time::Duration::from_millis(500));
+            let due = self.last_fullscreen_poll_at.is_none_or(|t| {
+                now.saturating_duration_since(t) >= std::time::Duration::from_millis(500)
+            });
             match (due, self.active_display.as_ref()) {
                 (true, Some(display)) => {
                     self.last_fullscreen_poll_at = Some(now);
@@ -173,9 +173,9 @@ impl WorkspaceObserver {
         };
 
         let caret_rect = {
-            let due = self
-                .last_caret_poll_at
-                .is_none_or(|t| now.saturating_duration_since(t) >= std::time::Duration::from_millis(250));
+            let due = self.last_caret_poll_at.is_none_or(|t| {
+                now.saturating_duration_since(t) >= std::time::Duration::from_millis(250)
+            });
             if due && self.is_accessibility_trusted() {
                 self.last_caret_poll_at = Some(now);
                 macos_polling::caret_rect_quartz()
@@ -190,7 +190,10 @@ impl WorkspaceObserver {
         let cursor_pos = if let Some(display) = self.active_display.as_ref() {
             let (cx, cy_cocoa) = macos_polling::cursor_cocoa_location();
             let cy_quartz = cocoa_to_quartz_y(cy_cocoa, display.primary_display_height);
-            crate::physics::Vec2 { x: cx, y: cy_quartz }
+            crate::physics::Vec2 {
+                x: cx,
+                y: cy_quartz,
+            }
         } else {
             self.last_snapshot.cursor_pos
         };
@@ -273,7 +276,11 @@ mod macos_polling {
             CGEventSourceStateID::CombinedSessionState,
             ANY_INPUT_EVENT,
         );
-        if secs.is_finite() && secs > 0.0 { secs as f32 } else { 0.0 }
+        if secs.is_finite() && secs > 0.0 {
+            secs as f32
+        } else {
+            0.0
+        }
     }
 
     /// Cumulative count of key-down events since the session started.
@@ -329,10 +336,9 @@ mod macos_polling {
     /// in practice we accept this limitation as the "safe default" of leaving the pet
     /// visible when we can't confirm fullscreen.
     pub fn any_fullscreen_on(active_bounds: PetRect, our_pid: i32) -> bool {
-        let Some(info) = CGWindowListCopyWindowInfo(
-            CGWindowListOption::OptionOnScreenOnly,
-            kCGNullWindowID,
-        ) else {
+        let Some(info) =
+            CGWindowListCopyWindowInfo(CGWindowListOption::OptionOnScreenOnly, kCGNullWindowID)
+        else {
             return false;
         };
 
@@ -500,9 +506,8 @@ mod macos_polling {
         // pointers stay valid for the entire AXIsProcessTrustedWithOptions
         // call. CFType callbacks will retain them.
         unsafe {
-            let key_ptr: *const c_void = (kAXTrustedCheckOptionPrompt
-                as *const objc2_core_foundation::CFString)
-                .cast();
+            let key_ptr: *const c_void =
+                (kAXTrustedCheckOptionPrompt as *const objc2_core_foundation::CFString).cast();
             // kCFBooleanTrue is Option<&'static CFBoolean>; on macOS it is
             // always Some, but we guard for completeness.
             let Some(value) = kCFBooleanTrue else {
@@ -637,14 +642,30 @@ mod macos_polling {
 #[cfg(not(target_os = "macos"))]
 mod macos_polling {
     use crate::physics::Rect as PetRect;
-    pub fn seconds_since_last_input() -> f32 { 0.0 }
-    pub fn key_down_counter() -> i64 { 0 }
-    pub fn frontmost_bundle_id() -> Option<String> { None }
-    pub fn any_fullscreen_on(_active_bounds: PetRect, _our_pid: i32) -> bool { false }
-    pub fn is_ax_trusted() -> bool { true }
-    pub fn caret_rect_quartz() -> Option<PetRect> { None }
-    pub fn ax_request_prompt() -> bool { true }
-    pub fn cursor_cocoa_location() -> (f32, f32) { (0.0, 0.0) }
+    pub fn seconds_since_last_input() -> f32 {
+        0.0
+    }
+    pub fn key_down_counter() -> i64 {
+        0
+    }
+    pub fn frontmost_bundle_id() -> Option<String> {
+        None
+    }
+    pub fn any_fullscreen_on(_active_bounds: PetRect, _our_pid: i32) -> bool {
+        false
+    }
+    pub fn is_ax_trusted() -> bool {
+        true
+    }
+    pub fn caret_rect_quartz() -> Option<PetRect> {
+        None
+    }
+    pub fn ax_request_prompt() -> bool {
+        true
+    }
+    pub fn cursor_cocoa_location() -> (f32, f32) {
+        (0.0, 0.0)
+    }
 }
 
 /// Bundle identifiers we consider "editors" for the purpose of marking the user busy.
@@ -674,11 +695,7 @@ pub fn is_editor_bundle_id(bundle_id: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn snapshot_with(
-        editor: bool,
-        typing_rate: f32,
-        idle: f32,
-    ) -> WorkspaceSnapshot {
+    fn snapshot_with(editor: bool, typing_rate: f32, idle: f32) -> WorkspaceSnapshot {
         WorkspaceSnapshot {
             workspace_available: true,
             seconds_idle: idle,
@@ -723,15 +740,24 @@ mod tests {
     #[test]
     fn boundary_at_2s_idle_is_neither_busy_nor_idle() {
         let s = snapshot_with(false, 0.0, 2.0);
-        assert!(!s.is_busy(), "seconds_idle == 2.0 should not be busy (condition is < 2.0)");
-        assert!(!s.is_idle(), "seconds_idle == 2.0 should not be idle (condition is >= 5.0)");
+        assert!(
+            !s.is_busy(),
+            "seconds_idle == 2.0 should not be busy (condition is < 2.0)"
+        );
+        assert!(
+            !s.is_idle(),
+            "seconds_idle == 2.0 should not be idle (condition is >= 5.0)"
+        );
     }
 
     #[test]
     fn boundary_at_5s_idle_is_idle() {
         let s = snapshot_with(false, 0.0, 5.0);
         assert!(!s.is_busy());
-        assert!(s.is_idle(), "seconds_idle == 5.0 should be idle (condition is >= 5.0)");
+        assert!(
+            s.is_idle(),
+            "seconds_idle == 5.0 should be idle (condition is >= 5.0)"
+        );
     }
 
     #[test]
@@ -789,7 +815,10 @@ mod tests {
     fn observer_tick_returns_workspace_tick() {
         let mut observer = WorkspaceObserver::new();
         let tick = observer.tick(std::time::Instant::now());
-        assert!(!tick.trust_changed, "first tick has no prior state to compare");
+        assert!(
+            !tick.trust_changed,
+            "first tick has no prior state to compare"
+        );
         // On the stub (non-macOS) build, workspace_available is false.
         // On macOS, this test runs but real polling hasn't been wired yet,
         // so workspace_available is also false. Both are acceptable.

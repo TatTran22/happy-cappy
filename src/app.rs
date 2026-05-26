@@ -1388,7 +1388,10 @@ mod tests {
         let mut app = DesktopPetApp::new_with_event_proxy(None);
         app.settings.pet_visible = true;
         app.set_auto_hidden(true);
-        assert!(app.settings.pet_visible, "auto-hide must not touch the persisted setting");
+        assert!(
+            app.settings.pet_visible,
+            "auto-hide must not touch the persisted setting"
+        );
         assert!(app.auto_hidden);
     }
 
@@ -1405,7 +1408,10 @@ mod tests {
         assert!(!app.effective_window_visible());
 
         app.set_auto_hidden(false);
-        assert!(!app.effective_window_visible(), "pet_visible drives the final result");
+        assert!(
+            !app.effective_window_visible(),
+            "pet_visible drives the final result"
+        );
     }
 }
 
@@ -1434,14 +1440,20 @@ mod decide_intent_tests {
             frontmost_is_editor: false,
             caret_rect: caret,
             fullscreen_active: false,
-            cursor_pos: Vec2 { x: cursor_x, y: 0.0 },
+            cursor_pos: Vec2 {
+                x: cursor_x,
+                y: 0.0,
+            },
         }
     }
 
     fn pet_frame_at(x: f32) -> Rect {
         Rect {
             min: Vec2 { x, y: 0.0 },
-            max: Vec2 { x: x + 100.0, y: 100.0 },
+            max: Vec2 {
+                x: x + 100.0,
+                y: 100.0,
+            },
         }
     }
 
@@ -1454,21 +1466,48 @@ mod decide_intent_tests {
 
     #[test]
     fn chase_right_when_idle_and_cursor_to_right() {
-        let intent = decide_intent(&snap(6.0, 1000.0, None), &settings_all_on(), pet_frame_at(0.0));
-        assert_eq!(intent, BehaviorIntent::ChaseHorizontal { direction: Direction::Right });
+        let intent = decide_intent(
+            &snap(6.0, 1000.0, None),
+            &settings_all_on(),
+            pet_frame_at(0.0),
+        );
+        assert_eq!(
+            intent,
+            BehaviorIntent::ChaseHorizontal {
+                direction: Direction::Right
+            }
+        );
     }
 
     #[test]
     fn chase_left_when_idle_and_cursor_to_left() {
-        let intent = decide_intent(&snap(6.0, -50.0, None), &settings_all_on(), pet_frame_at(0.0));
-        assert_eq!(intent, BehaviorIntent::ChaseHorizontal { direction: Direction::Left });
+        let intent = decide_intent(
+            &snap(6.0, -50.0, None),
+            &settings_all_on(),
+            pet_frame_at(0.0),
+        );
+        assert_eq!(
+            intent,
+            BehaviorIntent::ChaseHorizontal {
+                direction: Direction::Left
+            }
+        );
     }
 
     #[test]
     fn avoid_horizontal_when_busy_and_cursor_to_right() {
         // seconds_idle < 2.0 → busy
-        let intent = decide_intent(&snap(0.5, 1000.0, None), &settings_all_on(), pet_frame_at(0.0));
-        assert_eq!(intent, BehaviorIntent::AvoidHorizontal { direction: Direction::Left });
+        let intent = decide_intent(
+            &snap(0.5, 1000.0, None),
+            &settings_all_on(),
+            pet_frame_at(0.0),
+        );
+        assert_eq!(
+            intent,
+            BehaviorIntent::AvoidHorizontal {
+                direction: Direction::Left
+            }
+        );
     }
 
     #[test]
@@ -1478,8 +1517,17 @@ mod decide_intent_tests {
             max: Vec2 { x: 120.0, y: 60.0 },
         };
         // pet_center_x = 100.0; exit_left_dx = 40, exit_right_dx = 20 → exit Right.
-        let intent = decide_intent(&snap(6.0, 1000.0, Some(caret)), &settings_all_on(), pet_frame_at(50.0));
-        assert_eq!(intent, BehaviorIntent::AvoidRectHorizontal { direction: Direction::Right });
+        let intent = decide_intent(
+            &snap(6.0, 1000.0, Some(caret)),
+            &settings_all_on(),
+            pet_frame_at(50.0),
+        );
+        assert_eq!(
+            intent,
+            BehaviorIntent::AvoidRectHorizontal {
+                direction: Direction::Right
+            }
+        );
     }
 
     #[test]
@@ -1489,8 +1537,17 @@ mod decide_intent_tests {
             max: Vec2 { x: 560.0, y: 60.0 },
         };
         // Idle and cursor to right; AvoidRect should NOT fire since rect is far away.
-        let intent = decide_intent(&snap(6.0, 1000.0, Some(caret)), &settings_all_on(), pet_frame_at(0.0));
-        assert_eq!(intent, BehaviorIntent::ChaseHorizontal { direction: Direction::Right });
+        let intent = decide_intent(
+            &snap(6.0, 1000.0, Some(caret)),
+            &settings_all_on(),
+            pet_frame_at(0.0),
+        );
+        assert_eq!(
+            intent,
+            BehaviorIntent::ChaseHorizontal {
+                direction: Direction::Right
+            }
+        );
     }
 
     #[test]
@@ -1502,7 +1559,11 @@ mod decide_intent_tests {
             min: Vec2 { x: 60.0, y: 40.0 },
             max: Vec2 { x: 120.0, y: 60.0 },
         };
-        let intent = decide_intent(&snap(6.0, 1000.0, Some(caret)), &settings, pet_frame_at(50.0));
+        let intent = decide_intent(
+            &snap(6.0, 1000.0, Some(caret)),
+            &settings,
+            pet_frame_at(50.0),
+        );
         assert_eq!(intent, BehaviorIntent::Idle);
     }
 

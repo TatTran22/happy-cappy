@@ -98,8 +98,14 @@ impl Rect {
 impl From<Bounds> for Rect {
     fn from(bounds: Bounds) -> Self {
         Rect {
-            min: Vec2 { x: bounds.min_x, y: bounds.min_y },
-            max: Vec2 { x: bounds.max_x, y: bounds.max_y },
+            min: Vec2 {
+                x: bounds.min_x,
+                y: bounds.min_y,
+            },
+            max: Vec2 {
+                x: bounds.max_x,
+                y: bounds.max_y,
+            },
         }
     }
 }
@@ -186,29 +192,52 @@ mod tests {
 
     #[test]
     fn rect_intersects_returns_true_for_overlap() {
-        let a = Rect { min: Vec2 { x: 0.0, y: 0.0 }, max: Vec2 { x: 10.0, y: 10.0 } };
-        let b = Rect { min: Vec2 { x: 5.0, y: 5.0 }, max: Vec2 { x: 15.0, y: 15.0 } };
+        let a = Rect {
+            min: Vec2 { x: 0.0, y: 0.0 },
+            max: Vec2 { x: 10.0, y: 10.0 },
+        };
+        let b = Rect {
+            min: Vec2 { x: 5.0, y: 5.0 },
+            max: Vec2 { x: 15.0, y: 15.0 },
+        };
         assert!(a.intersects(&b));
         assert!(b.intersects(&a));
     }
 
     #[test]
     fn rect_intersects_returns_false_for_disjoint() {
-        let a = Rect { min: Vec2 { x: 0.0, y: 0.0 }, max: Vec2 { x: 10.0, y: 10.0 } };
-        let b = Rect { min: Vec2 { x: 20.0, y: 20.0 }, max: Vec2 { x: 30.0, y: 30.0 } };
+        let a = Rect {
+            min: Vec2 { x: 0.0, y: 0.0 },
+            max: Vec2 { x: 10.0, y: 10.0 },
+        };
+        let b = Rect {
+            min: Vec2 { x: 20.0, y: 20.0 },
+            max: Vec2 { x: 30.0, y: 30.0 },
+        };
         assert!(!a.intersects(&b));
     }
 
     #[test]
     fn rect_intersects_returns_false_for_touch_only() {
-        let a = Rect { min: Vec2 { x: 0.0, y: 0.0 }, max: Vec2 { x: 10.0, y: 10.0 } };
-        let b = Rect { min: Vec2 { x: 10.0, y: 10.0 }, max: Vec2 { x: 20.0, y: 20.0 } };
+        let a = Rect {
+            min: Vec2 { x: 0.0, y: 0.0 },
+            max: Vec2 { x: 10.0, y: 10.0 },
+        };
+        let b = Rect {
+            min: Vec2 { x: 10.0, y: 10.0 },
+            max: Vec2 { x: 20.0, y: 20.0 },
+        };
         assert!(!a.intersects(&b));
     }
 
     #[test]
     fn rect_from_bounds_round_trips() {
-        let bounds = Bounds { min_x: 0.0, min_y: 0.0, max_x: 100.0, max_y: 50.0 };
+        let bounds = Bounds {
+            min_x: 0.0,
+            min_y: 0.0,
+            max_x: 100.0,
+            max_y: 50.0,
+        };
         let rect: Rect = bounds.into();
         assert_eq!(rect.min, Vec2 { x: 0.0, y: 0.0 });
         assert_eq!(rect.max, Vec2 { x: 100.0, y: 50.0 });

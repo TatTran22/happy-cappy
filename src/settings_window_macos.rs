@@ -39,10 +39,10 @@ mod macos {
         command_target_macos::CommandTarget,
         menu_bar::{
             MENU_TAG_AVOID_TEXT_CURSOR, MENU_TAG_AX_STATUS_LABEL, MENU_TAG_FOCUS_MODE,
-            MENU_TAG_FOLLOW_CURSOR_WHEN_IDLE, MENU_TAG_HIDE_ON_FULLSCREEN, MENU_TAG_HOVER_INTENSITY,
-            MENU_TAG_MONITOR_BEHAVIOR, MENU_TAG_MOVEMENT_SPEED, MENU_TAG_PERSONALITY,
-            MENU_TAG_QUIT, MENU_TAG_REREQUEST_ACCESSIBILITY, MENU_TAG_RESET, MENU_TAG_SCALE,
-            MENU_TAG_SHOW_HIDE,
+            MENU_TAG_FOLLOW_CURSOR_WHEN_IDLE, MENU_TAG_HIDE_ON_FULLSCREEN,
+            MENU_TAG_HOVER_INTENSITY, MENU_TAG_MONITOR_BEHAVIOR, MENU_TAG_MOVEMENT_SPEED,
+            MENU_TAG_PERSONALITY, MENU_TAG_QUIT, MENU_TAG_REREQUEST_ACCESSIBILITY, MENU_TAG_RESET,
+            MENU_TAG_SCALE, MENU_TAG_SHOW_HIDE,
         },
         pet::Personality,
         settings::{AppSettings, MonitorBehavior},
@@ -398,12 +398,7 @@ mod macos {
         settings: &AppSettings,
     ) -> (Retained<NSButton>, Retained<NSButton>, Retained<NSButton>) {
         let heading = NSTextField::labelWithString(ns_string!("Workspace Awareness"), mtm);
-        heading.setFrame(rect(
-            MARGIN_X,
-            190.0,
-            PANEL_WIDTH - (MARGIN_X * 2.0),
-            22.0,
-        ));
+        heading.setFrame(rect(MARGIN_X, 190.0, PANEL_WIDTH - (MARGIN_X * 2.0), 22.0));
         content_view.addSubview(&heading);
 
         let follow = add_checkbox(
@@ -480,10 +475,8 @@ mod macos {
         mtm: MainThreadMarker,
         target_object: &AnyObject,
     ) -> Retained<NSButton> {
-        let button = NSButton::initWithFrame(
-            NSButton::alloc(mtm),
-            rect(MARGIN_X, 22.0, 280.0, 28.0),
-        );
+        let button =
+            NSButton::initWithFrame(NSButton::alloc(mtm), rect(MARGIN_X, 22.0, 280.0, 28.0));
         button.setTitle(ns_string!("Re-request Accessibility permission"));
         button.setTag(MENU_TAG_REREQUEST_ACCESSIBILITY as NSInteger);
         unsafe {
