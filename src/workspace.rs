@@ -77,6 +77,95 @@ pub fn cocoa_to_quartz_y(cocoa_y: f32, primary_display_height: f32) -> f32 {
     primary_display_height - cocoa_y
 }
 
+use std::time::Instant;
+
+pub struct WorkspaceObserver {
+    last_known_ax_trusted: Option<bool>,
+    pub(crate) prompted_for_accessibility_at_startup: bool,
+    active_display: Option<DisplayInfo>,
+    last_snapshot: WorkspaceSnapshot,
+    // Real impl will add: last_tick_at, last_key_counter, last_frontmost_poll_at, etc.
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DisplayInfo {
+    /// monitor.name(); diagnostic only, not unique
+    pub name: Option<String>,
+    /// pet-space, top-left origin, points
+    pub bounds_logical: Rect,
+    /// window.scale_factor()
+    pub scale_factor: f32,
+    /// height in points of the primary display, used as Y-flip pivot
+    pub primary_display_height: f32,
+}
+
+impl WorkspaceObserver {
+    pub fn new() -> Self {
+        Self {
+            last_known_ax_trusted: None,
+            prompted_for_accessibility_at_startup: false,
+            active_display: None,
+            last_snapshot: WorkspaceSnapshot::default(),
+        }
+    }
+
+    pub fn set_active_display(&mut self, info: Option<DisplayInfo>) {
+        self.active_display = info;
+    }
+
+    pub fn tick(&mut self, _now: Instant) -> WorkspaceTick {
+        // Real polling lands in subsequent tasks. For now, return the last
+        // known snapshot (default at startup) and report no trust change.
+        let now_trusted = self.is_accessibility_trusted();
+        let trust_changed = match self.last_known_ax_trusted {
+            Some(prev) => prev != now_trusted,
+            None => false,
+        };
+        self.last_known_ax_trusted = Some(now_trusted);
+        WorkspaceTick {
+            snapshot: self.last_snapshot.clone(),
+            trust_changed,
+        }
+    }
+
+    pub fn is_accessibility_trusted(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            // Real wrapper in a later task. For now: not trusted, so the AX flow
+            // degrades to caret_rect = None — which is the safe default.
+            false
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            true
+        }
+    }
+
+    pub fn request_accessibility_on_startup_if_enabled(&mut self, avoid_text_cursor: bool) {
+        if !avoid_text_cursor || self.prompted_for_accessibility_at_startup {
+            return;
+        }
+        self.prompted_for_accessibility_at_startup = true;
+        #[cfg(target_os = "macos")]
+        {
+            // Real AXIsProcessTrustedWithOptions call lands in Task 15.
+        }
+    }
+
+    pub fn request_accessibility_now(&mut self) {
+        #[cfg(target_os = "macos")]
+        {
+            // Real AXIsProcessTrustedWithOptions call lands in Task 15.
+        }
+    }
+}
+
+impl Default for WorkspaceObserver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,5 +279,26 @@ mod tests {
     fn cocoa_to_quartz_y_on_display_below_primary() {
         // Negative cocoa y means below primary; quartz y > primary_height.
         assert_eq!(cocoa_to_quartz_y(-300.0, 900.0), 1200.0);
+    }
+
+    #[test]
+    fn observer_tick_returns_workspace_tick() {
+        let mut observer = WorkspaceObserver::new();
+        let tick = observer.tick(std::time::Instant::now());
+        assert!(!tick.trust_changed, "first tick has no prior state to compare");
+        // On the stub (non-macOS) build, workspace_available is false.
+        // On macOS, this test runs but real polling hasn't been wired yet,
+        // so workspace_available is also false. Both are acceptable.
+        let _ = tick.snapshot;
+    }
+
+    #[test]
+    fn observer_owns_borrow_releases_after_tick() {
+        // Compile-fence test: if tick() returned &WorkspaceSnapshot, the second
+        // borrow below would fail.
+        let mut observer = WorkspaceObserver::new();
+        let tick = observer.tick(std::time::Instant::now());
+        let _trusted = observer.is_accessibility_trusted();
+        let _ = tick;
     }
 }
