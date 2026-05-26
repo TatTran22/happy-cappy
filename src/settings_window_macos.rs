@@ -46,7 +46,7 @@ mod macos {
     };
 
     const PANEL_WIDTH: f64 = 420.0;
-    const PANEL_HEIGHT: f64 = 370.0;
+    const PANEL_HEIGHT: f64 = 560.0;
     const MARGIN_X: f64 = 24.0;
     const LABEL_WIDTH: f64 = 126.0;
     const CONTROL_X: f64 = 154.0;
@@ -96,7 +96,7 @@ mod macos {
                 &content_view,
                 mtm,
                 "Scale",
-                198.0,
+                388.0,
                 MENU_TAG_SCALE,
                 settings.scale,
                 AppSettings::MIN_SCALE,
@@ -107,7 +107,7 @@ mod macos {
                 &content_view,
                 mtm,
                 "Movement",
-                156.0,
+                346.0,
                 MENU_TAG_MOVEMENT_SPEED,
                 settings.movement_speed,
                 AppSettings::MIN_MOVEMENT_SPEED,
@@ -118,7 +118,7 @@ mod macos {
                 &content_view,
                 mtm,
                 "Hover",
-                114.0,
+                304.0,
                 MENU_TAG_HOVER_INTENSITY,
                 settings.hover_intensity,
                 AppSettings::MIN_HOVER_INTENSITY,
@@ -164,7 +164,7 @@ mod macos {
 
     fn add_title(content_view: &NSView, mtm: MainThreadMarker) {
         let title = NSTextField::labelWithString(ns_string!("Happy Cappy"), mtm);
-        title.setFrame(rect(MARGIN_X, 322.0, PANEL_WIDTH - (MARGIN_X * 2.0), 28.0));
+        title.setFrame(rect(MARGIN_X, 512.0, PANEL_WIDTH - (MARGIN_X * 2.0), 28.0));
         content_view.addSubview(&title);
     }
 
@@ -174,11 +174,11 @@ mod macos {
         target_object: &AnyObject,
         personality: Personality,
     ) {
-        add_label(content_view, mtm, ns_string!("Personality"), 264.0);
+        add_label(content_view, mtm, ns_string!("Personality"), 454.0);
 
         let control = NSSegmentedControl::initWithFrame(
             NSSegmentedControl::alloc(mtm),
-            rect(CONTROL_X, 262.0, CONTROL_WIDTH, ROW_HEIGHT),
+            rect(CONTROL_X, 452.0, CONTROL_WIDTH, ROW_HEIGHT),
         );
         control.setSegmentCount(3);
         control.setLabel_forSegment(ns_string!("Calm"), 0);
@@ -204,11 +204,11 @@ mod macos {
         target_object: &AnyObject,
         monitor_behavior: MonitorBehavior,
     ) {
-        add_label(content_view, mtm, ns_string!("Display"), 230.0);
+        add_label(content_view, mtm, ns_string!("Display"), 420.0);
 
         let control = NSSegmentedControl::initWithFrame(
             NSSegmentedControl::alloc(mtm),
-            rect(CONTROL_X, 228.0, CONTROL_WIDTH, ROW_HEIGHT),
+            rect(CONTROL_X, 418.0, CONTROL_WIDTH, ROW_HEIGHT),
         );
         control.setSegmentCount(2);
         control.setLabel_forSegment(ns_string!("Current Display"), 0);
@@ -276,7 +276,7 @@ mod macos {
                 mtm,
             )
         };
-        quit.setFrame(rect(MARGIN_X, 28.0, 132.0, 30.0));
+        quit.setFrame(rect(MARGIN_X, 218.0, 132.0, 30.0));
         quit.setTag(MENU_TAG_QUIT as NSInteger);
         content_view.addSubview(&quit);
 
@@ -288,7 +288,7 @@ mod macos {
                 mtm,
             )
         };
-        reset.setFrame(rect(168.0, 28.0, 112.0, 30.0));
+        reset.setFrame(rect(168.0, 218.0, 112.0, 30.0));
         reset.setTag(MENU_TAG_RESET as NSInteger);
         content_view.addSubview(&reset);
 
@@ -300,7 +300,7 @@ mod macos {
                 mtm,
             )
         };
-        focus_mode.setFrame(rect(168.0, 64.0, 112.0, 30.0));
+        focus_mode.setFrame(rect(168.0, 254.0, 112.0, 30.0));
         focus_mode.setTag(MENU_TAG_FOCUS_MODE as NSInteger);
         content_view.addSubview(&focus_mode);
 
@@ -312,7 +312,7 @@ mod macos {
                 mtm,
             )
         };
-        show_hide.setFrame(rect(292.0, 28.0, 108.0, 30.0));
+        show_hide.setFrame(rect(292.0, 218.0, 108.0, 30.0));
         show_hide.setTag(MENU_TAG_SHOW_HIDE as NSInteger);
         content_view.addSubview(&show_hide);
         (show_hide, focus_mode)
