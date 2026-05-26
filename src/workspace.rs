@@ -88,6 +88,7 @@ pub struct WorkspaceObserver {
     last_key_counter: Option<i64>,
     last_frontmost_poll_at: Option<Instant>,
     last_fullscreen_poll_at: Option<Instant>,
+    last_caret_poll_at: Option<Instant>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -113,6 +114,7 @@ impl WorkspaceObserver {
             last_key_counter: None,
             last_frontmost_poll_at: None,
             last_fullscreen_poll_at: None,
+            last_caret_poll_at: None,
         }
     }
 
@@ -170,6 +172,21 @@ impl WorkspaceObserver {
             }
         };
 
+        let caret_rect = {
+            let due = self
+                .last_caret_poll_at
+                .is_none_or(|t| now.saturating_duration_since(t) >= std::time::Duration::from_millis(250));
+            if due && self.is_accessibility_trusted() {
+                self.last_caret_poll_at = Some(now);
+                macos_polling::caret_rect_quartz()
+            } else if due {
+                self.last_caret_poll_at = Some(now);
+                None
+            } else {
+                self.last_snapshot.caret_rect
+            }
+        };
+
         self.last_snapshot = WorkspaceSnapshot {
             workspace_available: cfg!(target_os = "macos"),
             seconds_idle,
@@ -177,9 +194,8 @@ impl WorkspaceObserver {
             frontmost_bundle_id,
             frontmost_is_editor,
             fullscreen_active,
-            // The remaining fields stay at their previous values; later tasks
-            // populate them.
-            caret_rect: self.last_snapshot.caret_rect,
+            caret_rect,
+            // cursor_pos is populated in a later task.
             cursor_pos: self.last_snapshot.cursor_pos,
         };
 
@@ -197,16 +213,7 @@ impl WorkspaceObserver {
     }
 
     pub fn is_accessibility_trusted(&self) -> bool {
-        #[cfg(target_os = "macos")]
-        {
-            // Real wrapper in a later task. For now: not trusted, so the AX flow
-            // degrades to caret_rect = None — which is the safe default.
-            false
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            true
-        }
+        macos_polling::is_ax_trusted()
     }
 
     pub fn request_accessibility_on_startup_if_enabled(&mut self, avoid_text_cursor: bool) {
@@ -419,6 +426,136 @@ mod macos_polling {
             Some(value as *const CFDictionary)
         }
     }
+
+    use objc2_application_services::{
+        kAXValueCGRectType, AXIsProcessTrusted, AXUIElement, AXValue,
+    };
+    use objc2_core_foundation::CFType;
+
+    /// Returns true if this process is trusted for the Accessibility API (System
+    /// Settings → Privacy & Security → Accessibility). The call is cheap and safe
+    /// to invoke every tick.
+    pub fn is_ax_trusted() -> bool {
+        // SAFETY: AXIsProcessTrusted has no inputs and no side effects beyond
+        // returning the bool. The free-function form is marked `unsafe` only
+        // because all extern-C wrappers in the crate are.
+        unsafe { AXIsProcessTrusted() }
+    }
+
+    /// Best-effort caret bounding rect from the system-wide focused UI element,
+    /// expressed in Quartz global screen points (origin = primary display
+    /// top-left, Y down). Returns `None` whenever any step of the AX chain
+    /// fails: no focused element, focus doesn't expose
+    /// `AXSelectedTextRange`/`AXBoundsForRange`, empty selection, or the target
+    /// app stalls past the 100 ms messaging timeout.
+    ///
+    /// Implementation notes / deviations from spec:
+    /// - `objc2-application-services 0.3.2` does not export
+    ///   `kAXFocusedUIElementAttribute` / `kAXSelectedTextRangeAttribute` /
+    ///   `kAXBoundsForRangeParameterizedAttribute` as constants, so we build
+    ///   them as static CFStrings.
+    /// - The wrappers `AXUIElement::copy_attribute_value` /
+    ///   `copy_parameterized_attribute_value` take an out-pointer
+    ///   (`NonNull<*const CFType>`) and return `AXError`; the spec's
+    ///   `.ok()?` pattern doesn't apply. We check `AXError::Success` and use
+    ///   `CFRetained::from_raw` to take ownership of the returned CF object.
+    /// - `CFRetained::downcast` is safe and returns `Result`; we use it to go
+    ///   from CFType → AXUIElement / AXValue.
+    pub fn caret_rect_quartz() -> Option<PetRect> {
+        use objc2_application_services::AXError;
+        use objc2_core_foundation::{CFRetained, CGRect};
+        use std::ptr::NonNull;
+
+        // SAFETY: AXUIElementCreateSystemWide returns a valid retained AXUIElement.
+        let systemwide: CFRetained<AXUIElement> = unsafe { AXUIElement::new_system_wide() };
+        // SAFETY: timeout value 0.1 is a valid positive float; element is valid.
+        let _ = unsafe { systemwide.set_messaging_timeout(0.1) };
+
+        // Step 1: focused UI element from systemwide.
+        let focused_attr = CFString::from_static_str("AXFocusedUIElement");
+        let mut focused_raw: *const CFType = std::ptr::null();
+        // SAFETY: out-pointer is valid for the duration of the call. The
+        // function returns AXError; on Success it writes a retained CFType ref
+        // to the out-pointer (or null on rare misbehavior).
+        let err = unsafe {
+            systemwide.copy_attribute_value(
+                &focused_attr,
+                NonNull::new_unchecked(&mut focused_raw as *mut *const CFType),
+            )
+        };
+        if err != AXError::Success || focused_raw.is_null() {
+            return None;
+        }
+        // SAFETY: AX gave us ownership of a retained CFType non-null pointer.
+        let focused_cf: CFRetained<CFType> =
+            unsafe { CFRetained::from_raw(NonNull::new_unchecked(focused_raw as *mut CFType)) };
+        let focused: CFRetained<AXUIElement> = focused_cf.downcast::<AXUIElement>().ok()?;
+        // SAFETY: timeout value is valid; element is valid.
+        let _ = unsafe { focused.set_messaging_timeout(0.1) };
+
+        // Step 2: selected text range from focused element.
+        let range_attr = CFString::from_static_str("AXSelectedTextRange");
+        let mut range_raw: *const CFType = std::ptr::null();
+        // SAFETY: see above.
+        let err = unsafe {
+            focused.copy_attribute_value(
+                &range_attr,
+                NonNull::new_unchecked(&mut range_raw as *mut *const CFType),
+            )
+        };
+        if err != AXError::Success || range_raw.is_null() {
+            return None;
+        }
+        // SAFETY: AX gave us ownership of a retained CFType non-null pointer.
+        let range_value: CFRetained<CFType> =
+            unsafe { CFRetained::from_raw(NonNull::new_unchecked(range_raw as *mut CFType)) };
+
+        // Step 3: parameterized bounds-for-range on focused element.
+        let bounds_attr = CFString::from_static_str("AXBoundsForRange");
+        let mut bounds_raw: *const CFType = std::ptr::null();
+        // SAFETY: out-pointer valid; `range_value` is a valid CFType the
+        // focused element knows how to interpret as an AXValue<CFRange>.
+        let err = unsafe {
+            focused.copy_parameterized_attribute_value(
+                &bounds_attr,
+                &range_value,
+                NonNull::new_unchecked(&mut bounds_raw as *mut *const CFType),
+            )
+        };
+        if err != AXError::Success || bounds_raw.is_null() {
+            return None;
+        }
+        // SAFETY: see above.
+        let bounds_cf: CFRetained<CFType> =
+            unsafe { CFRetained::from_raw(NonNull::new_unchecked(bounds_raw as *mut CFType)) };
+        let ax_value: CFRetained<AXValue> = bounds_cf.downcast::<AXValue>().ok()?;
+
+        // Step 4: unbox the AXValue into a CGRect.
+        let mut rect = CGRect::default();
+        // SAFETY: AXValueGetValue writes into `rect` if the type matches; we
+        // pass the matching kAXValueCGRectType discriminant. The wrapper
+        // signature wants AXValueType, constructed from the discriminator u32.
+        let ok = unsafe {
+            ax_value.value(
+                objc2_application_services::AXValueType(kAXValueCGRectType),
+                NonNull::new_unchecked(&mut rect as *mut CGRect as *mut std::ffi::c_void),
+            )
+        };
+        if !ok {
+            return None;
+        }
+
+        Some(PetRect {
+            min: crate::physics::Vec2 {
+                x: rect.origin.x as f32,
+                y: rect.origin.y as f32,
+            },
+            max: crate::physics::Vec2 {
+                x: (rect.origin.x + rect.size.width) as f32,
+                y: (rect.origin.y + rect.size.height) as f32,
+            },
+        })
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -428,6 +565,8 @@ mod macos_polling {
     pub fn key_down_counter() -> i64 { 0 }
     pub fn frontmost_bundle_id() -> Option<String> { None }
     pub fn any_fullscreen_on(_active_bounds: PetRect, _our_pid: i32) -> bool { false }
+    pub fn is_ax_trusted() -> bool { true }
+    pub fn caret_rect_quartz() -> Option<PetRect> { None }
 }
 
 /// Bundle identifiers we consider "editors" for the purpose of marking the user busy.
