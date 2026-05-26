@@ -38,6 +38,12 @@ pub struct AppSettings {
     pub pet_visible: bool,
     #[serde(default = "default_focus_mode")]
     pub focus_mode: bool,
+    #[serde(default = "default_true")]
+    pub follow_cursor_when_idle: bool,
+    #[serde(default = "default_true")]
+    pub avoid_text_cursor: bool,
+    #[serde(default = "default_true")]
+    pub hide_on_fullscreen: bool,
     #[serde(default)]
     pub last_position: Option<StoredPosition>,
 }
@@ -91,6 +97,9 @@ impl Default for AppSettings {
             monitor_behavior: MonitorBehavior::CurrentDisplay,
             pet_visible: true,
             focus_mode: false,
+            follow_cursor_when_idle: true,
+            avoid_text_cursor: true,
+            hide_on_fullscreen: true,
             last_position: None,
         }
     }
@@ -206,6 +215,10 @@ fn default_focus_mode() -> bool {
     false
 }
 
+fn default_true() -> bool {
+    true
+}
+
 pub fn default_settings_path() -> Result<PathBuf, SettingsError> {
     let home = std::env::var_os("HOME").ok_or(SettingsError::MissingHomeDirectory)?;
     Ok(PathBuf::from(home)
@@ -318,6 +331,9 @@ mod tests {
             monitor_behavior: MonitorBehavior::PrimaryDisplay,
             pet_visible: false,
             focus_mode: true,
+            follow_cursor_when_idle: false,
+            avoid_text_cursor: false,
+            hide_on_fullscreen: false,
             last_position: Some(StoredPosition {
                 x: 22.0,
                 y: 33.0,
@@ -421,5 +437,36 @@ mod tests {
         assert_eq!(settings, AppSettings::default());
 
         let _ = fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod workspace_awareness_settings_tests {
+    use super::*;
+
+    #[test]
+    fn missing_workspace_keys_default_to_true() {
+        let json = r#"{"personality":"calm","scale":2.0,"movement_speed":1.0,"hover_intensity":1.0,"monitor_behavior":"current_display","pet_visible":true,"focus_mode":false}"#;
+        let settings: AppSettings = serde_json::from_str(json).expect("parse");
+        assert!(settings.follow_cursor_when_idle);
+        assert!(settings.avoid_text_cursor);
+        assert!(settings.hide_on_fullscreen);
+    }
+
+    #[test]
+    fn explicit_workspace_keys_round_trip() {
+        let json = r#"{"personality":"calm","scale":2.0,"movement_speed":1.0,"hover_intensity":1.0,"monitor_behavior":"current_display","pet_visible":true,"focus_mode":false,"follow_cursor_when_idle":false,"avoid_text_cursor":false,"hide_on_fullscreen":false}"#;
+        let settings: AppSettings = serde_json::from_str(json).expect("parse");
+        assert!(!settings.follow_cursor_when_idle);
+        assert!(!settings.avoid_text_cursor);
+        assert!(!settings.hide_on_fullscreen);
+    }
+
+    #[test]
+    fn default_settings_have_workspace_features_enabled() {
+        let s = AppSettings::default();
+        assert!(s.follow_cursor_when_idle);
+        assert!(s.avoid_text_cursor);
+        assert!(s.hide_on_fullscreen);
     }
 }
