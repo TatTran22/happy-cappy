@@ -866,7 +866,7 @@ impl ApplicationHandler<AppCommand> for DesktopPetApp {
     }
 }
 
-pub fn decide_intent(
+pub(crate) fn decide_intent(
     snapshot: &crate::workspace::WorkspaceSnapshot,
     settings: &crate::settings::AppSettings,
     pet_frame: crate::physics::Rect,
@@ -1307,11 +1307,9 @@ mod decide_intent_tests {
             min: Vec2 { x: 60.0, y: 40.0 },
             max: Vec2 { x: 120.0, y: 60.0 },
         };
+        // pet_center_x = 100.0; exit_left_dx = 40, exit_right_dx = 20 → exit Right.
         let intent = decide_intent(&snap(6.0, 1000.0, Some(caret)), &settings_all_on(), pet_frame_at(50.0));
-        match intent {
-            BehaviorIntent::AvoidRectHorizontal { .. } => {}
-            other => panic!("expected AvoidRectHorizontal, got {other:?}"),
-        }
+        assert_eq!(intent, BehaviorIntent::AvoidRectHorizontal { direction: Direction::Right });
     }
 
     #[test]
@@ -1335,6 +1333,16 @@ mod decide_intent_tests {
             max: Vec2 { x: 120.0, y: 60.0 },
         };
         let intent = decide_intent(&snap(6.0, 1000.0, Some(caret)), &settings, pet_frame_at(50.0));
+        assert_eq!(intent, BehaviorIntent::Idle);
+    }
+
+    #[test]
+    fn avoid_horizontal_disabled_when_follow_cursor_off() {
+        let mut settings = settings_all_on();
+        settings.follow_cursor_when_idle = false;
+        // seconds_idle < 2.0 → busy, cursor to right.
+        // With follow_cursor_when_idle off, the avoid arm must also be disabled.
+        let intent = decide_intent(&snap(0.5, 1000.0, None), &settings, pet_frame_at(0.0));
         assert_eq!(intent, BehaviorIntent::Idle);
     }
 }
