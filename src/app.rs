@@ -74,6 +74,7 @@ pub struct DesktopPetApp {
     settings_path: Option<std::path::PathBuf>,
     active_monitor_name: Option<String>,
     pet_visible: bool,
+    auto_hidden: bool,
     interaction: InteractionState,
     last_cursor_local_position: Option<Vec2>,
     last_cursor_screen_position: Option<Vec2>,
@@ -102,6 +103,7 @@ impl DesktopPetApp {
             settings_path: default_settings_path().ok(),
             active_monitor_name: None,
             pet_visible: true,
+            auto_hidden: false,
             interaction: InteractionState::default(),
             last_cursor_local_position: None,
             last_cursor_screen_position: None,
@@ -131,6 +133,7 @@ impl DesktopPetApp {
             settings_path: default_settings_path().ok(),
             active_monitor_name: None,
             pet_visible: true,
+            auto_hidden: false,
             interaction: InteractionState::default(),
             last_cursor_local_position: None,
             last_cursor_screen_position: None,
@@ -381,6 +384,25 @@ impl DesktopPetApp {
         self.sync_settings_window();
         self.sync_menu_bar();
         self.save_settings();
+    }
+
+    #[allow(dead_code)]
+    fn effective_window_visible(&self) -> bool {
+        self.pet_visible && !self.auto_hidden
+    }
+
+    #[allow(dead_code)]
+    fn apply_window_visibility(&mut self) {
+        let visible = self.effective_window_visible();
+        if let Some(window) = &self.window {
+            window.set_visible(visible);
+            if visible {
+                window.request_redraw();
+            }
+        }
+        if visible {
+            self.next_tick_at = Instant::now();
+        }
     }
 
     #[allow(dead_code)]
@@ -1264,6 +1286,24 @@ mod tests {
                 display_name: None,
             })
         );
+    }
+
+    #[test]
+    fn effective_window_visible_truth_table() {
+        let mut app = DesktopPetApp::new_with_event_proxy(None);
+        app.pet_visible = true;
+        app.auto_hidden = false;
+        assert!(app.effective_window_visible());
+
+        app.auto_hidden = true;
+        assert!(!app.effective_window_visible());
+
+        app.pet_visible = false;
+        app.auto_hidden = false;
+        assert!(!app.effective_window_visible());
+
+        app.auto_hidden = true;
+        assert!(!app.effective_window_visible());
     }
 }
 
