@@ -252,6 +252,9 @@ mod tests {
         assert_eq!(settings.movement_speed, 1.0);
         assert_eq!(settings.hover_intensity, 1.0);
         assert_eq!(settings.last_position, None);
+        assert!(settings.follow_cursor_when_idle);
+        assert!(settings.avoid_text_cursor);
+        assert!(settings.hide_on_fullscreen);
     }
 
     #[test]
@@ -380,6 +383,9 @@ mod tests {
                 display_name: None,
             })
         );
+        assert!(loaded.follow_cursor_when_idle);
+        assert!(loaded.avoid_text_cursor);
+        assert!(loaded.hide_on_fullscreen);
 
         let _ = fs::remove_dir_all(root);
     }
