@@ -22,7 +22,7 @@ use crate::{
     renderer::PetRenderer,
     settings::{default_settings_path, AppSettings, SettingsError},
     settings_window_macos::SettingsWindowController,
-    sprite::{SpriteRow, SpriteSheet},
+    sprite::SpriteSheet,
     window_macos::{apply_desktop_pet_window_behavior, set_pet_window_mouse_passthrough},
 };
 
@@ -737,11 +737,10 @@ impl DesktopPetApp {
             return;
         };
 
-        let group = self.pet.current_animation_group();
-        let row = SpriteRow::from(group);
-        let flip_x = group == crate::pet::AnimationGroup::WalkRight
+        let sprite_index = self.pet.current_sprite_index();
+        let flip_x = self.pet.current_animation_name() == "walk-right"
             && self.pet.direction() == Direction::Left;
-        let rect = sprite_sheet.frame_rect(row, self.pet.frame_index());
+        let rect = sprite_sheet.frame_rect_by_index(sprite_index);
 
         if let Err(error) = renderer.draw(sprite_sheet.image(), rect, flip_x) {
             warn!("failed to draw desktop pet frame: {error}");
@@ -760,8 +759,8 @@ impl DesktopPetApp {
         let Some(sprite_sheet) = &self.sprite_sheet else {
             return false;
         };
-        let group = self.pet.current_animation_group();
-        let rect = sprite_sheet.frame_rect(SpriteRow::from(group), self.pet.frame_index());
+        let sprite_index = self.pet.current_sprite_index();
+        let rect = sprite_sheet.frame_rect_by_index(sprite_index);
         let scale = if self.settings.scale.is_finite() && self.settings.scale > 0.0 {
             self.settings.scale
         } else {
@@ -771,7 +770,7 @@ impl DesktopPetApp {
             x: point.x / scale,
             y: point.y / scale,
         };
-        let flip_x = group == crate::pet::AnimationGroup::WalkRight
+        let flip_x = self.pet.current_animation_name() == "walk-right"
             && self.pet.direction() == Direction::Left;
         alpha_hit_test_with_flip(sprite_sheet.image(), rect, scaled_point, flip_x)
     }
