@@ -629,7 +629,10 @@ impl DesktopPetApp {
         }
 
         if let Some(settings_window) = &self.settings_window {
-            settings_window.sync_settings(&self.settings);
+            settings_window.sync_settings(
+                &self.settings,
+                self.workspace_observer.is_accessibility_trusted(),
+            );
             settings_window.show();
             self.next_tick_at = Instant::now();
         } else {
@@ -639,7 +642,10 @@ impl DesktopPetApp {
 
     fn sync_settings_window(&self) {
         if let Some(settings_window) = &self.settings_window {
-            settings_window.sync_settings(&self.settings);
+            settings_window.sync_settings(
+                &self.settings,
+                self.workspace_observer.is_accessibility_trusted(),
+            );
         }
     }
 

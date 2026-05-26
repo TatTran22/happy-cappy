@@ -14,7 +14,7 @@ impl SettingsWindowController {
 
     pub fn show(&self) {}
 
-    pub fn sync_settings(&self, _settings: &crate::settings::AppSettings) {}
+    pub fn sync_settings(&self, _settings: &crate::settings::AppSettings, _ax_trusted: bool) {}
 
     pub fn is_visible(&self) -> bool {
         false
@@ -148,9 +148,13 @@ mod macos {
             self.panel.orderFrontRegardless();
         }
 
-        pub fn sync_settings(&self, settings: &AppSettings) {
+        pub fn sync_settings(&self, settings: &AppSettings, ax_trusted: bool) {
             set_show_hide_title(&self.show_hide_button, settings.pet_visible);
             set_focus_mode_title(&self.focus_mode_button, settings.focus_mode);
+            // Workspace Awareness checkboxes + AX status label are wired in
+            // Phase 4 (Task 26). This signature change lands first so all
+            // callsites pass the AX trust state.
+            let _ = ax_trusted;
         }
 
         pub fn is_visible(&self) -> bool {
