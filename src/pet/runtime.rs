@@ -5,8 +5,6 @@ use crate::micro_action::{ActionOverride, MicroAction};
 use crate::pet::manifest::PetManifest;
 use crate::pet::resolver::{lookup_with_fallback, resolve_animation_chain};
 
-pub mod manifest;
-pub mod resolver;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -55,7 +53,7 @@ pub enum BehaviorIntent {
 }
 
 #[derive(Debug)]
-pub struct Pet {
+pub struct PetRuntime {
     state: PetState,
     direction: Direction,
     frame_index: usize,
@@ -85,13 +83,13 @@ const SLEEP_STATE_MS: u64 = 500;
 const WALK_SPEED: f32 = 45.0;
 const WALK_DISTANCE: f32 = 120.0;
 
-impl Default for Pet {
+impl Default for PetRuntime {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Pet {
+impl PetRuntime {
     pub fn new() -> Self {
         Self::new_with_seed(0)
     }
@@ -467,21 +465,21 @@ mod tests {
 
     #[test]
     fn starts_idle_on_frame_zero() {
-        let pet = Pet::new();
+        let pet = PetRuntime::new();
         assert_eq!(pet.state(), PetState::Idle);
         assert_eq!(pet.frame_index(), 0);
     }
 
     #[test]
     fn cheerful_is_default_personality() {
-        let pet = Pet::new();
+        let pet = PetRuntime::new();
         assert_eq!(pet.personality(), Personality::Cheerful);
         assert_eq!(pet.behavior_mode(), BehaviorMode::Default);
     }
 
     #[test]
     fn personality_changes_hover_group() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
 
         pet.apply_personality(Personality::Calm);
         pet.set_hovered(true);
@@ -496,7 +494,7 @@ mod tests {
 
     #[test]
     fn dragging_overrides_hover_and_movement() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
         pet.set_hovered(true);
         pet.set_dragging(true);
 
@@ -509,7 +507,7 @@ mod tests {
 
     #[test]
     fn dragging_pauses_autonomous_state_progression() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
         pet.set_dragging(true);
 
         let tick = pet.tick(Duration::from_secs(10));
@@ -521,7 +519,7 @@ mod tests {
 
     #[test]
     fn dragging_pauses_walk_distance_consumption() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
         pet.force_state_for_test(PetState::Walk);
         pet.set_dragging(true);
 
@@ -533,7 +531,7 @@ mod tests {
 
     #[test]
     fn expression_loop_advances_without_requiring_walk() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
         let first = pet.current_animation_name().to_string();
         pet.tick(Duration::from_secs(3));
         let second = pet.current_animation_name().to_string();
@@ -544,7 +542,7 @@ mod tests {
 
     #[test]
     fn movement_speed_zero_disables_walk_speed() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
         pet.set_movement_speed_multiplier(0.0);
         pet.force_state_for_test(PetState::Walk);
 
@@ -557,7 +555,7 @@ mod tests {
 
     #[test]
     fn movement_speed_zero_prevents_entering_stuck_walk_state() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
         pet.set_movement_speed_multiplier(0.0);
 
         let tick = pet.tick(Duration::from_secs(5));
@@ -569,7 +567,7 @@ mod tests {
 
     #[test]
     fn movement_speed_multiplier_controls_walk_completion_distance() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
         pet.force_state_for_test(PetState::Walk);
         pet.set_movement_speed_multiplier(2.0);
 
@@ -580,7 +578,7 @@ mod tests {
 
     #[test]
     fn movement_speed_update_refreshes_behavior_immediately() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
         pet.force_state_for_test(PetState::Walk);
         assert_eq!(pet.behavior_mode(), BehaviorMode::Walking);
 
@@ -592,7 +590,7 @@ mod tests {
 
     #[test]
     fn nap_micro_action_uses_sleepy_group_and_stops_movement() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
         pet.force_state_for_test(PetState::Walk);
 
         pet.start_micro_action(MicroAction::Nap);
@@ -605,7 +603,7 @@ mod tests {
 
     #[test]
     fn cheer_up_micro_action_uses_happy_group_temporarily() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
 
         pet.start_micro_action(MicroAction::CheerUp);
         pet.tick(Duration::from_secs(7));
@@ -621,7 +619,7 @@ mod tests {
 
     #[test]
     fn hover_overrides_micro_action_until_hover_ends() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
 
         pet.start_micro_action(MicroAction::CheerUp);
         pet.set_hovered(true);
@@ -637,7 +635,7 @@ mod tests {
 
     #[test]
     fn idle_animation_advances_every_200ms() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
         let tick = pet.tick(Duration::from_millis(200));
         assert_eq!(tick.frame_index, 1);
         assert_eq!(tick.state, PetState::Idle);
@@ -645,14 +643,14 @@ mod tests {
 
     #[test]
     fn idle_transitions_to_walk_after_threshold() {
-        let mut pet = Pet::new_with_seed(1);
+        let mut pet = PetRuntime::new_with_seed(1);
         pet.tick(Duration::from_secs(5));
         assert_eq!(pet.state(), PetState::Walk);
     }
 
     #[test]
     fn idle_transitions_to_walk_after_incremental_expression_ticks() {
-        let mut pet = Pet::new_with_seed(1);
+        let mut pet = PetRuntime::new_with_seed(1);
 
         for _ in 0..25 {
             pet.tick(Duration::from_millis(200));
@@ -663,7 +661,7 @@ mod tests {
 
     #[test]
     fn forced_walk_preserves_walk_distance_invariant() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
         pet.force_state_for_test(PetState::Walk);
 
         let tick = pet.tick(Duration::from_millis(1));
@@ -675,12 +673,12 @@ mod tests {
 
     #[test]
     fn walk_speed_sign_follows_seed_direction() {
-        let mut right_pet = Pet::new_with_seed(0);
+        let mut right_pet = PetRuntime::new_with_seed(0);
         right_pet.force_state_for_test(PetState::Walk);
         assert_eq!(right_pet.direction(), Direction::Right);
         assert_eq!(right_pet.tick(Duration::ZERO).speed_x, WALK_SPEED);
 
-        let mut left_pet = Pet::new_with_seed(1);
+        let mut left_pet = PetRuntime::new_with_seed(1);
         left_pet.force_state_for_test(PetState::Walk);
         assert_eq!(left_pet.direction(), Direction::Left);
         assert_eq!(left_pet.tick(Duration::ZERO).speed_x, -WALK_SPEED);
@@ -688,7 +686,7 @@ mod tests {
 
     #[test]
     fn turn_around_reverses_walk_speed_direction() {
-        let mut pet = Pet::new_with_seed(0);
+        let mut pet = PetRuntime::new_with_seed(0);
         pet.force_state_for_test(PetState::Walk);
 
         pet.turn_around();
@@ -699,7 +697,7 @@ mod tests {
 
     #[test]
     fn walk_returns_to_idle_after_configured_distance() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
         pet.force_state_for_test(PetState::Walk);
 
         let tick = pet.tick(Duration::from_secs_f32(WALK_DISTANCE / WALK_SPEED));
@@ -712,7 +710,7 @@ mod tests {
 
     #[test]
     fn sleep_returns_to_idle_after_12_seconds() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
         pet.force_state_for_test(PetState::Sleep);
 
         let tick = pet.tick(Duration::from_secs(12));
@@ -725,7 +723,7 @@ mod tests {
 
     #[test]
     fn sleep_is_naturally_reachable_after_two_walk_cycles() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
 
         for _ in 0..2 {
             pet.tick(Duration::from_secs(5));
@@ -745,7 +743,7 @@ mod tests {
 
     #[test]
     fn naturally_reached_sleep_returns_to_idle_after_12_seconds() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
 
         for _ in 0..2 {
             pet.tick(Duration::from_secs(5));
@@ -764,7 +762,7 @@ mod tests {
 
     #[test]
     fn tick_reports_walk_at_idle_to_walk_boundary() {
-        let mut pet = Pet::new_with_seed(1);
+        let mut pet = PetRuntime::new_with_seed(1);
 
         let tick = pet.tick(Duration::from_secs(5));
 
@@ -776,7 +774,7 @@ mod tests {
 
     #[test]
     fn sleep_uses_slow_animation_rate() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
         pet.force_state_for_test(PetState::Sleep);
         pet.tick(Duration::from_millis(499));
         assert_eq!(pet.frame_index(), 0);
@@ -786,7 +784,7 @@ mod tests {
 
     #[test]
     fn set_intent_stores_intent() {
-        let mut pet = Pet::new_with_seed(0);
+        let mut pet = PetRuntime::new_with_seed(0);
         pet.set_intent(BehaviorIntent::ChaseHorizontal {
             direction: Direction::Right,
         });
@@ -800,13 +798,13 @@ mod tests {
 
     #[test]
     fn default_intent_is_idle() {
-        let pet = Pet::new_with_seed(0);
+        let pet = PetRuntime::new_with_seed(0);
         assert_eq!(pet.intent(), BehaviorIntent::Idle);
     }
 
     #[test]
     fn set_intent_avoid_rect_interrupts_idle_into_walk() {
-        let mut pet = Pet::new_with_seed(0);
+        let mut pet = PetRuntime::new_with_seed(0);
         // Force pet into Idle state via a complete tick cycle.
         pet.tick(std::time::Duration::from_millis(0));
         assert_eq!(pet.state(), PetState::Idle);
@@ -821,7 +819,7 @@ mod tests {
 
     #[test]
     fn set_intent_avoid_rect_redirects_mid_walk() {
-        let mut pet = Pet::new_with_seed(0); // seed 0 starts Direction::Right
+        let mut pet = PetRuntime::new_with_seed(0); // seed 0 starts Direction::Right
         pet.tick(std::time::Duration::ZERO);
         while pet.state() != PetState::Walk {
             pet.tick(std::time::Duration::from_millis(200));
@@ -843,7 +841,7 @@ mod tests {
 
     #[test]
     fn set_intent_chase_does_not_interrupt_mid_walk() {
-        let mut pet = Pet::new_with_seed(0); // seed 0 starts Direction::Right
+        let mut pet = PetRuntime::new_with_seed(0); // seed 0 starts Direction::Right
         pet.tick(std::time::Duration::ZERO);
         while pet.state() != PetState::Walk {
             pet.tick(std::time::Duration::from_millis(200));
@@ -861,13 +859,13 @@ mod tests {
 
     #[test]
     fn current_animation_name_is_idle_at_construction() {
-        let pet = Pet::new();
+        let pet = PetRuntime::new();
         assert_eq!(pet.current_animation_name(), "idle");
     }
 
     #[test]
     fn current_animation_name_is_hover_calm_for_calm_hovered() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
         pet.apply_personality(Personality::Calm);
         pet.set_hovered(true);
         assert_eq!(pet.current_animation_name(), "hover-calm");
@@ -875,34 +873,34 @@ mod tests {
 
     #[test]
     fn current_animation_name_is_walk_right_when_walking() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
         pet.force_state_for_test(PetState::Walk);
         assert_eq!(pet.current_animation_name(), "walk-right");
     }
 
     #[test]
     fn current_sprite_index_starts_at_idle_frame_zero() {
-        let pet = Pet::new();
+        let pet = PetRuntime::new();
         assert_eq!(pet.current_sprite_index(), 0);
     }
 
     #[test]
     fn current_sprite_index_for_walk_starts_at_thirty_two() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
         pet.force_state_for_test(PetState::Walk);
         assert_eq!(pet.current_sprite_index(), 32);
     }
 
     #[test]
     fn frame_size_returns_manifest_geometry() {
-        let pet = Pet::new();
+        let pet = PetRuntime::new();
         assert_eq!(pet.frame_size(), (64, 64));
     }
 
     #[test]
     fn animation_name_change_does_not_reset_frame_index() {
         // Force into Walk state, advance two full frame_durations (200ms total at 100ms/frame).
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
         pet.force_state_for_test(PetState::Walk);
         pet.tick(Duration::from_millis(250));
         assert_eq!(pet.frame_index(), 2);
@@ -919,7 +917,7 @@ mod tests {
 
     #[test]
     fn hover_intensity_fractional_value_preserves_rounding_boundary() {
-        let mut pet = Pet::new();
+        let mut pet = PetRuntime::new();
         pet.apply_personality(Personality::Cheerful);
         pet.set_hover_intensity(1.3);
         pet.set_hovered(true);
