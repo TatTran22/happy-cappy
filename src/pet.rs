@@ -195,9 +195,12 @@ impl Pet {
         self.intent = intent;
         if let BehaviorIntent::AvoidRectHorizontal { direction } = intent {
             self.direction = direction;
-            self.walk_distance_remaining = WALK_DISTANCE;
             if matches!(self.state, PetState::Idle | PetState::Sleep) {
                 self.enter_walk();
+            } else {
+                // Mid-Walk: keep walking, but with full distance in the new direction
+                // so a brief intent flip doesn't immediately terminate the segment.
+                self.walk_distance_remaining = WALK_DISTANCE;
             }
         }
     }
@@ -814,19 +817,34 @@ mod tests {
     }
 
     #[test]
-    fn set_intent_chase_does_not_interrupt_mid_walk() {
-        let mut pet = Pet::new_with_seed(0);
-        pet.tick(std::time::Duration::from_millis(0));
-        // Drive the pet into a walk segment.
+    fn set_intent_avoid_rect_redirects_mid_walk() {
+        let mut pet = Pet::new_with_seed(0); // seed 0 starts Direction::Right
+        pet.tick(std::time::Duration::ZERO);
         while pet.state() != PetState::Walk {
             pet.tick(std::time::Duration::from_millis(200));
         }
-        let direction_before = pet.tick(std::time::Duration::ZERO).speed_x.signum();
+        // Pet is now mid-Walk going Right.
+        pet.set_intent(BehaviorIntent::AvoidRectHorizontal { direction: Direction::Left });
+        assert_eq!(pet.state(), PetState::Walk, "should stay in Walk, not re-enter");
+        assert!(
+            pet.tick(std::time::Duration::ZERO).speed_x < 0.0,
+            "direction should flip to Left immediately"
+        );
+    }
 
+    #[test]
+    fn set_intent_chase_does_not_interrupt_mid_walk() {
+        let mut pet = Pet::new_with_seed(0); // seed 0 starts Direction::Right
+        pet.tick(std::time::Duration::ZERO);
+        while pet.state() != PetState::Walk {
+            pet.tick(std::time::Duration::from_millis(200));
+        }
+        // Pet is now mid-Walk going Right.
         pet.set_intent(BehaviorIntent::ChaseHorizontal { direction: Direction::Left });
-
-        // Within the same walk segment, the direction is preserved.
-        let direction_after = pet.tick(std::time::Duration::ZERO).speed_x.signum();
-        assert_eq!(direction_before, direction_after);
+        // ChaseHorizontal must NOT interrupt: direction stays Right within this walk segment.
+        assert!(
+            pet.tick(std::time::Duration::ZERO).speed_x > 0.0,
+            "Chase intent should be queued, not interrupt mid-walk; direction must remain Right"
+        );
     }
 }
