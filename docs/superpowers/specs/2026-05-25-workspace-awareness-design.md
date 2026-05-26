@@ -56,14 +56,16 @@ impl WorkspaceObserver {
 }
 ```
 
-The app calls `set_active_display(Some(DisplayInfo { ... }))` whenever `DesktopPetApp::recompute_physics_bounds()` (or the equivalent block at `app.rs:220-247`) updates `active_monitor_name` — sourcing:
-- `bounds_logical` from `monitor.position()` and `monitor.size()` divided by `monitor.scale_factor()`,
-- `scale_factor` from `window.scale_factor()`,
-- `primary_display_height` from `event_loop.primary_monitor().size().height / event_loop.primary_monitor().scale_factor()` (using the **primary monitor's own scale factor**, NOT the pet display's `window.scale_factor()`, because on mixed-DPI setups the two can differ — sourcing from the wrong one would skew Y-flip for any cursor position on the primary display). Cached on the observer; recomputed only on display reconfiguration.
+The app calls `set_active_display(Some(DisplayInfo { ... }))` from the same block at `app.rs:220-247` that already builds `self.physics.bounds`. Sourcing rules — chosen so observer bounds and physics bounds can never diverge:
+- `bounds_logical = Rect::from(self.physics.bounds)` — taken directly from the `Bounds` the app just assigned, NOT recomputed from `monitor.position()`/`size()`/scale. Any future change to how physics bounds are computed automatically flows through to the observer. (The existing computation at `app.rs:234-243` uses `window.scale_factor()`; whether that's correct for mixed-DPI is a separate, pre-existing question — see deferred item below.)
+- `scale_factor` from `window.scale_factor()` — kept as the pet display's scale because everything downstream that uses `DisplayInfo.scale_factor` (e.g., converting `monitor.size()` to logical points for sanity checks) needs to match the scale that was actually used to derive `bounds_logical`.
+- `primary_display_height` from `event_loop.primary_monitor().size().height / event_loop.primary_monitor().scale_factor()` — using the **primary monitor's own scale factor**, NOT the pet display's, because the Y-flip uses the primary display's logical height in its own native scale. On mixed-DPI setups this can differ from the pet display's scale. This value is cached on the observer; recomputed only on display reconfiguration.
 
 Passing only `name` is not enough because monitor names are not unique and don't recover origin/size/scale.
 
 For the fullscreen check specifically: a window from `CGWindowListCopyWindowInfo` is "fullscreen on the pet's display" iff its bounds equal `active_display.bounds_logical` within 1 px on each side. Both sides are in points, top-left origin (Quartz), no per-display origin adjustment needed because `bounds_logical` already encodes the display's global origin and the `CGWindowList` bounds are in the same space.
+
+**Deferred (open item):** the existing `app.rs:234-243` block sources `scale_factor` from `window.scale_factor()` even when computing bounds for a display the window is not on (e.g., `MonitorBehavior::PrimaryDisplay` while the window has been moved). This is a pre-existing latent bug, not one this spec introduces. Workspace-awareness inherits it. Plan stage should call it out separately; if it's fixed in the same plan, the observer's `bounds_logical` source remains correct by construction because it still tracks `self.physics.bounds`.
 
 ## Signals and how they're observed
 
@@ -73,7 +75,7 @@ For the fullscreen check specifically: a window from `CGWindowListCopyWindowInfo
 | Global key-event counter | `CGEventSourceCounterForEventType(kCGEventKeyDown)` | None | Every tick (delta → typing rate) |
 | Frontmost app bundle ID | `NSWorkspace.frontmostApplication.bundleIdentifier` | None | 500 ms |
 | Onscreen windows | `CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID)` | None | 500 ms |
-| Text caret rect | AX API: `AXFocusedUIElement` → `AXSelectedTextRange` → `kAXBoundsForRangeParameterizedAttribute` | Accessibility (prompt on first launch) | 250 ms |
+| Text caret rect | AX API: `AXUIElementCopyAttributeValue(systemwide, kAXFocusedUIElementAttribute)` → `AXUIElementCopyAttributeValue(focused, kAXSelectedTextRangeAttribute)` → **`AXUIElementCopyParameterizedAttributeValue(focused, kAXBoundsForRangeParameterizedAttribute, range)`** → `AXValueGetValue(..., kAXValueCGRectType, ...)`. The bounds attribute is parameterized (takes the selected-text range as a parameter), so it must be fetched with the *Parameterized* variant — `AXUIElementCopyAttributeValue` alone returns `kAXErrorAttributeUnsupported` for it. | Accessibility (prompt on first launch) | 250 ms |
 | Mouse cursor position | `NSEvent.mouseLocation` | None | Every tick |
 
 No global event taps. No Screen Recording permission. Only Accessibility, only for caret avoidance, prompted once.
@@ -133,7 +135,7 @@ The current `Cargo.toml` (the macOS target block, lines 18–34) only enables Ap
 | `NSScreen.frame`, `NSScreen.mainScreen` | existing `objc2-app-kit = "0.3"` | add feature `"NSScreen"` |
 | `NSControlStateValueOn/Off` | existing `objc2-app-kit = "0.3"` | covered by existing `"NSControl"` |
 | `CGEventSourceSecondsSinceLastEventType`, `CGEventSourceCounterForEventType`, `CGWindowListCopyWindowInfo`, `CGWindowID`, `CGRect`, `CGPoint` | new `objc2-core-graphics = "0.3"` | add to the `cfg(target_os = "macos")` dependencies block |
-| `AXUIElementCreateSystemWide`, `AXUIElementCopyAttributeValue`, `AXValueGetValue`, `AXIsProcessTrustedWithOptions`, `AXUIElementSetMessagingTimeout`, `kAXFocusedUIElementAttribute`, `kAXSelectedTextRangeAttribute`, `kAXBoundsForRangeParameterizedAttribute`, `kAXTrustedCheckOptionPrompt` | new `objc2-application-services = "0.3"` (provides the HIServices / AX bindings under one umbrella crate) | add to the `cfg(target_os = "macos")` dependencies block |
+| `AXUIElementCreateSystemWide`, `AXUIElementCopyAttributeValue`, **`AXUIElementCopyParameterizedAttributeValue`** (required for the caret-bounds fetch — `kAXBoundsForRangeParameterizedAttribute` is a parameterized attribute and cannot be retrieved via the non-parameterized call), `AXValueGetValue`, `AXIsProcessTrusted`, `AXIsProcessTrustedWithOptions`, `AXUIElementSetMessagingTimeout`, `kAXFocusedUIElementAttribute`, `kAXSelectedTextRangeAttribute`, `kAXBoundsForRangeParameterizedAttribute`, `kAXValueCGRectType`, `kAXTrustedCheckOptionPrompt` | new `objc2-application-services = "0.3"` (provides the HIServices / AX bindings under one umbrella crate) | add to the `cfg(target_os = "macos")` dependencies block |
 
 Plan stage will pin exact versions consistent with `objc2 = "0.6"`. The `objc2-core-graphics` and `objc2-application-services` crates are gated behind `#[cfg(target_os = "macos")]` so non-macOS builds remain dependency-free (the stub `WorkspaceObserver` referenced below does not pull these crates in).
 
@@ -273,7 +275,13 @@ The snapshot is consumed and dropped per tick — no shared mutable state betwee
 
 ## Error handling and degradation
 
-**Accessibility permission.** First launch with `avoid_text_cursor` on: `request_accessibility_on_startup_if_enabled` prompts once and sets the internal `prompted_for_accessibility_at_startup` flag. If denied, `caret_rect` is always `None`, the `AvoidRectHorizontal` arm of the decision tree never fires, and the rest of the features work normally. Settings exposes a "Re-request Accessibility permission" button that calls `request_accessibility_now` — this path bypasses the startup-once flag and always invokes `AXIsProcessTrustedWithOptions` with the prompt option. Whether macOS actually shows a dialog is up to macOS (it may suppress repeat prompts after a recent denial); in that case the user must clear the entry in System Settings → Privacy & Security → Accessibility, then click the button again. If the user grants it later via System Settings without clicking the button, the next AX poll picks it up automatically.
+**Accessibility permission.** Three entry points cover the realistic UX flows:
+
+1. **Startup with `avoid_text_cursor` already on** (returning user with feature enabled): `request_accessibility_on_startup_if_enabled` runs during `DesktopPetApp::init`, prompts once, sets `prompted_for_accessibility_at_startup`. Idempotent within a session.
+2. **User toggles `avoid_text_cursor` OFF → ON at runtime**: `SetAvoidTextCursor(true)` first calls `AXIsProcessTrusted()`; if not trusted, calls `request_accessibility_now()` to surface the dialog immediately. The toggle never appears enabled while permission is missing without the user seeing a dialog in the same interaction.
+3. **User explicitly clicks "Re-request Accessibility permission"**: `request_accessibility_now()` always calls `AXIsProcessTrustedWithOptions` with the prompt option, regardless of `prompted_at_startup`. This is the escape hatch when macOS suppresses repeat prompts after a sticky denial — the user must clear the entry in System Settings → Privacy & Security → Accessibility before macOS will show the dialog again.
+
+If denied, `caret_rect` is always `None`, the `AvoidRectHorizontal` arm of the decision tree never fires, and the rest of the features work normally. If the user grants permission later via System Settings without touching any in-app button, the next AX poll picks it up automatically.
 
 **Caret query failures.** If the focused element doesn't expose `kAXSelectedTextRangeAttribute` (canvas-based editors, some Catalyst apps, non-AX-friendly Electron builds), `caret_rect = None` for that poll. No error surfaced.
 
@@ -342,7 +350,7 @@ If `CGWindowListCopyWindowInfo` returns an error (rare, can happen during displa
 
 Command dispatch (in `app.rs`):
 - `AppCommand::SetFollowCursorWhenIdle(false)` updates `self.settings.follow_cursor_when_idle` and calls `save_settings()`.
-- `AppCommand::SetAvoidTextCursor(true)` triggers `request_accessibility_on_startup_if_enabled()` on the observer if the toggle is being turned on for the first time (after the startup window has passed, this is a no-op; the user gets the dialog via the Re-request button instead).
+- `AppCommand::SetAvoidTextCursor(true)` checks AX trust state first via `AXIsProcessTrusted()` (a non-prompting query). If trusted, no further action. If NOT trusted, calls `request_accessibility_now()` immediately — so flipping the toggle from OFF to ON in Settings always either confirms permission silently or surfaces the macOS prompt then and there. The user never sees a toggle that appears enabled while the feature silently degrades. The Re-request button remains available for the macOS-suppressed-dialog case (post-denial), but is no longer the only path from "enable the feature" to "see a dialog".
 - `AppCommand::SetHideOnFullscreen(false)` immediately allows next-tick `set_auto_hidden(false)` even if fullscreen is currently true.
 - `AppCommand::RequestAccessibilityPermission` always calls `request_accessibility_now()` regardless of `prompted_for_accessibility_at_startup`. Fake observer test verifies the call lands every time it is dispatched, even after the startup-once path has already run.
 - `request_accessibility_on_startup_if_enabled()` is a no-op on the second call (idempotent), and a no-op when `avoid_text_cursor` is false at startup.
