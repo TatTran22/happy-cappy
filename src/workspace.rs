@@ -84,7 +84,9 @@ pub struct WorkspaceObserver {
     pub(crate) prompted_for_accessibility_at_startup: bool,
     active_display: Option<DisplayInfo>,
     last_snapshot: WorkspaceSnapshot,
-    // Real impl will add: last_tick_at, last_key_counter, last_frontmost_poll_at, etc.
+    last_tick_at: Option<Instant>,
+    last_key_counter: Option<i64>,
+    // Real impl will add: last_frontmost_poll_at, etc.
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -106,6 +108,8 @@ impl WorkspaceObserver {
             prompted_for_accessibility_at_startup: false,
             active_display: None,
             last_snapshot: WorkspaceSnapshot::default(),
+            last_tick_at: None,
+            last_key_counter: None,
         }
     }
 
@@ -113,15 +117,45 @@ impl WorkspaceObserver {
         self.active_display = info;
     }
 
-    pub fn tick(&mut self, _now: Instant) -> WorkspaceTick {
-        // Real polling lands in subsequent tasks. For now, return the last
-        // known snapshot (default at startup) and report no trust change.
+    pub fn tick(&mut self, now: Instant) -> WorkspaceTick {
+        let seconds_idle = macos_polling::seconds_since_last_input();
+        let key_counter = macos_polling::key_down_counter();
+
+        let typing_rate_per_sec = match (self.last_tick_at, self.last_key_counter) {
+            (Some(prev_at), Some(prev_counter)) => {
+                let elapsed = now.saturating_duration_since(prev_at).as_secs_f32();
+                if elapsed > 0.0 {
+                    ((key_counter - prev_counter).max(0) as f32) / elapsed
+                } else {
+                    0.0
+                }
+            }
+            _ => 0.0,
+        };
+
+        self.last_tick_at = Some(now);
+        self.last_key_counter = Some(key_counter);
+
+        self.last_snapshot = WorkspaceSnapshot {
+            workspace_available: cfg!(target_os = "macos"),
+            seconds_idle,
+            typing_rate_per_sec,
+            // The remaining fields stay at their previous values; later tasks
+            // populate them.
+            frontmost_bundle_id: self.last_snapshot.frontmost_bundle_id.clone(),
+            frontmost_is_editor: self.last_snapshot.frontmost_is_editor,
+            caret_rect: self.last_snapshot.caret_rect,
+            fullscreen_active: self.last_snapshot.fullscreen_active,
+            cursor_pos: self.last_snapshot.cursor_pos,
+        };
+
         let now_trusted = self.is_accessibility_trusted();
         let trust_changed = match self.last_known_ax_trusted {
             Some(prev) => prev != now_trusted,
             None => false,
         };
         self.last_known_ax_trusted = Some(now_trusted);
+
         WorkspaceTick {
             snapshot: self.last_snapshot.clone(),
             trust_changed,
@@ -164,6 +198,44 @@ impl Default for WorkspaceObserver {
     fn default() -> Self {
         Self::new()
     }
+}
+
+#[cfg(target_os = "macos")]
+mod macos_polling {
+    use objc2_core_graphics::{CGEventSource, CGEventSourceStateID, CGEventType};
+
+    /// kCGAnyInputEventType in C is `~0u32` (0xFFFFFFFF). The objc2-core-graphics
+    /// crate doesn't expose a named constant for it (the same raw value is reused
+    /// in `CGEventType::TapDisabledByUserInput`), so we construct it explicitly.
+    /// Passing this sentinel to `seconds_since_last_event_type` returns the
+    /// seconds since the most recent event of ANY input type (mouse + keyboard).
+    const ANY_INPUT_EVENT: CGEventType = CGEventType(!0u32);
+
+    /// Seconds since the most recent input event (mouse or keyboard) globally.
+    pub fn seconds_since_last_input() -> f32 {
+        let secs = CGEventSource::seconds_since_last_event_type(
+            CGEventSourceStateID::CombinedSessionState,
+            ANY_INPUT_EVENT,
+        );
+        if secs.is_finite() && secs > 0.0 { secs as f32 } else { 0.0 }
+    }
+
+    /// Cumulative count of key-down events since the session started.
+    /// `counter_for_event_type` returns u32; we widen to i64 so a u32
+    /// wraparound is still representable when subtracting two samples.
+    pub fn key_down_counter() -> i64 {
+        let count = CGEventSource::counter_for_event_type(
+            CGEventSourceStateID::CombinedSessionState,
+            CGEventType::KeyDown, // matches kCGEventKeyDown = 10
+        );
+        count as i64
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+mod macos_polling {
+    pub fn seconds_since_last_input() -> f32 { 0.0 }
+    pub fn key_down_counter() -> i64 { 0 }
 }
 
 #[cfg(test)]
