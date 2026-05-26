@@ -1424,11 +1424,7 @@ mod decide_intent_tests {
     use crate::workspace::WorkspaceSnapshot;
 
     fn settings_all_on() -> AppSettings {
-        let mut s = AppSettings::default();
-        s.follow_cursor_when_idle = true;
-        s.avoid_text_cursor = true;
-        s.hide_on_fullscreen = true;
-        s
+        AppSettings::default()
     }
 
     fn snap(idle: f32, cursor_x: f32, caret: Option<Rect>) -> WorkspaceSnapshot {
