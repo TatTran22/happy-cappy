@@ -38,10 +38,11 @@ mod macos {
         app::AppCommand,
         command_target_macos::CommandTarget,
         menu_bar::{
-            MENU_TAG_AVOID_TEXT_CURSOR, MENU_TAG_FOCUS_MODE, MENU_TAG_FOLLOW_CURSOR_WHEN_IDLE,
-            MENU_TAG_HIDE_ON_FULLSCREEN, MENU_TAG_HOVER_INTENSITY, MENU_TAG_MONITOR_BEHAVIOR,
-            MENU_TAG_MOVEMENT_SPEED, MENU_TAG_PERSONALITY, MENU_TAG_QUIT, MENU_TAG_RESET,
-            MENU_TAG_SCALE, MENU_TAG_SHOW_HIDE,
+            MENU_TAG_AVOID_TEXT_CURSOR, MENU_TAG_AX_STATUS_LABEL, MENU_TAG_FOCUS_MODE,
+            MENU_TAG_FOLLOW_CURSOR_WHEN_IDLE, MENU_TAG_HIDE_ON_FULLSCREEN, MENU_TAG_HOVER_INTENSITY,
+            MENU_TAG_MONITOR_BEHAVIOR, MENU_TAG_MOVEMENT_SPEED, MENU_TAG_PERSONALITY,
+            MENU_TAG_QUIT, MENU_TAG_REREQUEST_ACCESSIBILITY, MENU_TAG_RESET, MENU_TAG_SCALE,
+            MENU_TAG_SHOW_HIDE,
         },
         pet::Personality,
         settings::{AppSettings, MonitorBehavior},
@@ -59,13 +60,11 @@ mod macos {
         panel: Retained<NSPanel>,
         show_hide_button: Retained<NSButton>,
         focus_mode_button: Retained<NSButton>,
-        // Read in Task 26 (sync_settings) and Task 27 (event dispatch).
-        #[allow(dead_code)]
         follow_cursor_when_idle_button: Retained<NSButton>,
-        #[allow(dead_code)]
         avoid_text_cursor_button: Retained<NSButton>,
-        #[allow(dead_code)]
         hide_on_fullscreen_button: Retained<NSButton>,
+        ax_status_label: Retained<NSTextField>,
+        _rerequest_accessibility_button: Retained<NSButton>,
         _target: Retained<CommandTarget>,
     }
 
@@ -146,6 +145,9 @@ mod macos {
                 avoid_text_cursor_button,
                 hide_on_fullscreen_button,
             ) = add_workspace_section(&content_view, mtm, target_object, settings);
+            let ax_status_label = add_ax_status_label(&content_view, mtm);
+            let rerequest_accessibility_button =
+                add_rerequest_button(&content_view, mtm, target_object);
 
             panel.center();
 
@@ -156,6 +158,8 @@ mod macos {
                 follow_cursor_when_idle_button,
                 avoid_text_cursor_button,
                 hide_on_fullscreen_button,
+                ax_status_label,
+                _rerequest_accessibility_button: rerequest_accessibility_button,
                 _target: target,
             })
         }
@@ -168,10 +172,32 @@ mod macos {
         pub fn sync_settings(&self, settings: &AppSettings, ax_trusted: bool) {
             set_show_hide_title(&self.show_hide_button, settings.pet_visible);
             set_focus_mode_title(&self.focus_mode_button, settings.focus_mode);
-            // Workspace Awareness checkboxes + AX status label are wired in
-            // Phase 4 (Task 26). This signature change lands first so all
-            // callsites pass the AX trust state.
-            let _ = ax_trusted;
+            self.follow_cursor_when_idle_button
+                .setState(if settings.follow_cursor_when_idle {
+                    NSControlStateValueOn
+                } else {
+                    NSControlStateValueOff
+                });
+            self.avoid_text_cursor_button
+                .setState(if settings.avoid_text_cursor {
+                    NSControlStateValueOn
+                } else {
+                    NSControlStateValueOff
+                });
+            self.hide_on_fullscreen_button
+                .setState(if settings.hide_on_fullscreen {
+                    NSControlStateValueOn
+                } else {
+                    NSControlStateValueOff
+                });
+            let label_text = if settings.avoid_text_cursor && !ax_trusted {
+                ns_string!(
+                    "Permission needed. If no dialog appears, click Re-request or open System Settings → Privacy & Security → Accessibility."
+                )
+            } else {
+                ns_string!("")
+            };
+            self.ax_status_label.setStringValue(label_text);
         }
 
         pub fn is_visible(&self) -> bool {
@@ -434,6 +460,36 @@ mod macos {
             });
             button.setTarget(Some(target_object));
             button.setAction(Some(CommandTarget::settings_value_selector()));
+        }
+        content_view.addSubview(&button);
+        button
+    }
+
+    fn add_ax_status_label(content_view: &NSView, mtm: MainThreadMarker) -> Retained<NSTextField> {
+        let label = NSTextField::labelWithString(ns_string!(""), mtm);
+        label.setFrame(rect(MARGIN_X, 58.0, PANEL_WIDTH - (MARGIN_X * 2.0), 36.0));
+        label.setTag(MENU_TAG_AX_STATUS_LABEL as NSInteger);
+        label.setLineBreakMode(objc2_app_kit::NSLineBreakMode::ByWordWrapping);
+        label.setMaximumNumberOfLines(2);
+        content_view.addSubview(&label);
+        label
+    }
+
+    fn add_rerequest_button(
+        content_view: &NSView,
+        mtm: MainThreadMarker,
+        target_object: &AnyObject,
+    ) -> Retained<NSButton> {
+        let button = NSButton::initWithFrame(
+            NSButton::alloc(mtm),
+            rect(MARGIN_X, 22.0, 280.0, 28.0),
+        );
+        button.setTitle(ns_string!("Re-request Accessibility permission"));
+        button.setTag(MENU_TAG_REREQUEST_ACCESSIBILITY as NSInteger);
+        unsafe {
+            button.setBezelStyle(objc2_app_kit::NSBezelStyle::Push);
+            button.setTarget(Some(target_object));
+            button.setAction(Some(CommandTarget::command_selector()));
         }
         content_view.addSubview(&button);
         button
