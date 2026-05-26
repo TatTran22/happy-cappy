@@ -14,6 +14,11 @@ pub const MENU_TAG_SCALE: isize = 1102;
 pub const MENU_TAG_MOVEMENT_SPEED: isize = 1103;
 pub const MENU_TAG_HOVER_INTENSITY: isize = 1104;
 pub const MENU_TAG_MONITOR_BEHAVIOR: isize = 1105;
+pub const MENU_TAG_FOLLOW_CURSOR_WHEN_IDLE: isize = 1106;
+pub const MENU_TAG_AVOID_TEXT_CURSOR: isize = 1107;
+pub const MENU_TAG_HIDE_ON_FULLSCREEN: isize = 1108;
+pub const MENU_TAG_REREQUEST_ACCESSIBILITY: isize = 1109;
+pub const MENU_TAG_AX_STATUS_LABEL: isize = 1110;
 
 pub fn command_from_tag(tag: isize) -> Option<AppCommand> {
     match tag {
@@ -24,6 +29,16 @@ pub fn command_from_tag(tag: isize) -> Option<AppCommand> {
         MENU_TAG_FOCUS_MODE => Some(AppCommand::ToggleFocusMode),
         MENU_TAG_NAP => Some(AppCommand::Nap),
         MENU_TAG_CHEER_UP => Some(AppCommand::CheerUp),
+        MENU_TAG_REREQUEST_ACCESSIBILITY => Some(AppCommand::RequestAccessibilityPermission),
+        _ => None,
+    }
+}
+
+pub fn settings_command_for_button(tag: isize, state_is_on: bool) -> Option<AppCommand> {
+    match tag {
+        MENU_TAG_FOLLOW_CURSOR_WHEN_IDLE => Some(AppCommand::SetFollowCursorWhenIdle(state_is_on)),
+        MENU_TAG_AVOID_TEXT_CURSOR => Some(AppCommand::SetAvoidTextCursor(state_is_on)),
+        MENU_TAG_HIDE_ON_FULLSCREEN => Some(AppCommand::SetHideOnFullscreen(state_is_on)),
         _ => None,
     }
 }
@@ -239,5 +254,46 @@ mod tests {
     fn focus_mode_titles_match_runtime_state() {
         assert_eq!(focus_mode_title(false), "Enable Focus Mode");
         assert_eq!(focus_mode_title(true), "Disable Focus Mode");
+    }
+
+    #[test]
+    fn settings_command_for_button_maps_follow_cursor() {
+        assert_eq!(
+            settings_command_for_button(MENU_TAG_FOLLOW_CURSOR_WHEN_IDLE, true),
+            Some(AppCommand::SetFollowCursorWhenIdle(true))
+        );
+        assert_eq!(
+            settings_command_for_button(MENU_TAG_FOLLOW_CURSOR_WHEN_IDLE, false),
+            Some(AppCommand::SetFollowCursorWhenIdle(false))
+        );
+    }
+
+    #[test]
+    fn settings_command_for_button_maps_avoid_text_cursor() {
+        assert_eq!(
+            settings_command_for_button(MENU_TAG_AVOID_TEXT_CURSOR, true),
+            Some(AppCommand::SetAvoidTextCursor(true))
+        );
+    }
+
+    #[test]
+    fn settings_command_for_button_maps_hide_on_fullscreen() {
+        assert_eq!(
+            settings_command_for_button(MENU_TAG_HIDE_ON_FULLSCREEN, false),
+            Some(AppCommand::SetHideOnFullscreen(false))
+        );
+    }
+
+    #[test]
+    fn settings_command_for_button_returns_none_for_slider_tag() {
+        assert_eq!(settings_command_for_button(MENU_TAG_SCALE, true), None);
+    }
+
+    #[test]
+    fn command_from_tag_maps_rerequest_accessibility() {
+        assert_eq!(
+            command_from_tag(MENU_TAG_REREQUEST_ACCESSIBILITY),
+            Some(AppCommand::RequestAccessibilityPermission)
+        );
     }
 }

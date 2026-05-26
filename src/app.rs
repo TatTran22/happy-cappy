@@ -51,6 +51,10 @@ pub enum AppCommand {
     SetMonitorBehavior(crate::settings::MonitorBehavior),
     SetFocusMode(bool),
     ToggleFocusMode,
+    SetFollowCursorWhenIdle(bool),
+    SetAvoidTextCursor(bool),
+    SetHideOnFullscreen(bool),
+    RequestAccessibilityPermission,
     Nap,
     CheerUp,
     Quit,
@@ -456,6 +460,27 @@ impl DesktopPetApp {
             }
             AppCommand::SetFocusMode(focus_mode) => self.set_focus_mode(focus_mode),
             AppCommand::ToggleFocusMode => self.set_focus_mode(!self.settings.focus_mode),
+            AppCommand::SetFollowCursorWhenIdle(value) => {
+                let mut settings = self.settings.clone();
+                settings.follow_cursor_when_idle = value;
+                self.apply_settings(settings);
+                self.save_settings();
+            }
+            AppCommand::SetAvoidTextCursor(value) => {
+                let mut settings = self.settings.clone();
+                settings.avoid_text_cursor = value;
+                self.apply_settings(settings);
+                self.save_settings();
+            }
+            AppCommand::SetHideOnFullscreen(value) => {
+                let mut settings = self.settings.clone();
+                settings.hide_on_fullscreen = value;
+                self.apply_settings(settings);
+                self.save_settings();
+            }
+            AppCommand::RequestAccessibilityPermission => {
+                // TODO(Phase 3): trigger accessibility permission re-request flow.
+            }
             AppCommand::Nap => {
                 self.pet.start_micro_action(MicroAction::Nap);
                 if let Some(window) = &self.window {
