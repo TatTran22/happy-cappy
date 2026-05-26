@@ -4,6 +4,7 @@ use std::time::Duration;
 use crate::micro_action::{ActionOverride, MicroAction};
 
 pub mod manifest;
+pub mod resolver;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
