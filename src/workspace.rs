@@ -68,6 +68,15 @@ pub struct WorkspaceTick {
     pub trust_changed: bool,
 }
 
+/// Convert a y coordinate from Cocoa global space (origin = primary display bottom-left, Y up)
+/// to Quartz space (origin = primary display top-left, Y down). x is unchanged across the
+/// two spaces. The pivot is the primary display's logical height, so this is correct for
+/// points on any secondary display, including displays with negative coordinates or
+/// vertical layouts — both spaces share the primary display as their anchor.
+pub fn cocoa_to_quartz_y(cocoa_y: f32, primary_display_height: f32) -> f32 {
+    primary_display_height - cocoa_y
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,5 +172,23 @@ mod tests {
         assert!(!s.is_idle());
         assert!(!s.fullscreen_active);
         assert!(s.caret_rect.is_none());
+    }
+
+    #[test]
+    fn cocoa_to_quartz_y_on_primary_display() {
+        // primary display 900 pt tall, point at cocoa y=800 → quartz y=100.
+        assert_eq!(cocoa_to_quartz_y(800.0, 900.0), 100.0);
+    }
+
+    #[test]
+    fn cocoa_to_quartz_y_on_display_above_primary() {
+        // Cocoa y > primary_height means above primary; quartz y is negative.
+        assert_eq!(cocoa_to_quartz_y(1400.0, 900.0), -500.0);
+    }
+
+    #[test]
+    fn cocoa_to_quartz_y_on_display_below_primary() {
+        // Negative cocoa y means below primary; quartz y > primary_height.
+        assert_eq!(cocoa_to_quartz_y(-300.0, 900.0), 1200.0);
     }
 }
