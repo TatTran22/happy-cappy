@@ -11,3 +11,4 @@ pub mod settings;
 pub mod settings_window_macos;
 pub mod sprite;
 pub mod window_macos;
+pub mod workspace;
