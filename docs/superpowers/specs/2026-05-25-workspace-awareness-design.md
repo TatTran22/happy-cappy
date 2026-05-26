@@ -85,6 +85,7 @@ No global event taps. No Screen Recording permission. Only Accessibility, and on
 A new module `src/workspace.rs` owns a `WorkspaceObserver` that polls the signals above and produces a `WorkspaceSnapshot`:
 
 ```rust
+#[derive(Clone, Debug)]
 pub struct WorkspaceSnapshot {
     pub workspace_available: bool,        // false on non-macOS stub builds; true on macOS once
                                           //   the observer has produced at least one real poll.
@@ -95,6 +96,19 @@ pub struct WorkspaceSnapshot {
     pub caret_rect: Option<Rect>,         // pet-space points, top-left origin (per §Coordinate system)
     pub fullscreen_active: bool,          // on the pet's active display only
     pub cursor_pos: Vec2,                 // pet-space points, top-left origin
+}
+
+/// Owned result of one observer tick. Returning an owned value (not `&WorkspaceSnapshot`)
+/// releases the `&mut WorkspaceObserver` borrow immediately, so the app can then call
+/// `is_accessibility_trusted()` or `sync_settings_window()` (both of which re-borrow
+/// the observer or other `&mut self` state) without fighting the borrow checker.
+#[derive(Clone, Debug)]
+pub struct WorkspaceTick {
+    pub snapshot: WorkspaceSnapshot,
+    /// True if `is_accessibility_trusted()` flipped during this tick relative to the
+    /// previous one. The app uses this to decide whether to re-run sync_settings_window
+    /// without polling AX state on every tick.
+    pub trust_changed: bool,
 }
 
 impl WorkspaceSnapshot {
@@ -140,16 +154,17 @@ The current `Cargo.toml` (the macOS target block, lines 18–34) only enables Ap
 | `NSEvent.mouseLocation` | existing `objc2-app-kit = "0.3"` | add feature `"NSEvent"` |
 | `NSScreen.frame`, `NSScreen.mainScreen` | existing `objc2-app-kit = "0.3"` | add feature `"NSScreen"` |
 | `NSControlStateValueOn/Off` | existing `objc2-app-kit = "0.3"` | covered by existing `"NSControl"` |
-| `CGEventSourceSecondsSinceLastEventType`, `CGEventSourceCounterForEventType` | new `objc2-core-graphics = "0.3"` | features required: `"CGEventSource"`. Add to the `cfg(target_os = "macos")` dependencies block |
-| `CGWindowListCopyWindowInfo`, `CGWindowID`, `CGRect`, `CGPoint` | same `objc2-core-graphics = "0.3"` | features required: `"CGWindow"` (window-list functions are gated behind this feature) — combine with `"CGEventSource"` in the same `features = [...]` array |
-| `AXUIElementCreateSystemWide`, `AXUIElementCopyAttributeValue`, **`AXUIElementCopyParameterizedAttributeValue`** (required for the caret-bounds fetch — `kAXBoundsForRangeParameterizedAttribute` is a parameterized attribute and cannot be retrieved via the non-parameterized call), `AXValueGetValue`, `AXIsProcessTrusted`, `AXIsProcessTrustedWithOptions`, `AXUIElementSetMessagingTimeout` | new `objc2-application-services = "0.3"` | features required: `"AXUIElement"`, `"AXValue"`, `"AXError"` |
-| String constants: `kAXFocusedUIElementAttribute`, `kAXSelectedTextRangeAttribute`, `kAXBoundsForRangeParameterizedAttribute` | same `objc2-application-services = "0.3"` | feature required: `"AXAttributeConstants"` — without it, the named string constants are not exported |
-| `kAXValueCGRectType` | same `objc2-application-services = "0.3"` | feature required: `"AXValueConstants"` |
-| `kAXTrustedCheckOptionPrompt` | **not reliably exposed** by `objc2-application-services` 0.3 | **commit to the extern-block fallback** for this single symbol: declare `extern "C" { static kAXTrustedCheckOptionPrompt: CFStringRef; }` and link `ApplicationServices` (`#[link(name = "ApplicationServices", kind = "framework")]`). Confirmed during plan-stage audit — do not assume the crate exports this constant |
+| `CGEventSourceSecondsSinceLastEventType`, `CGEventSourceCounterForEventType` | new `objc2-core-graphics = "0.3"` | features required: `"CGEventSource"` AND `"CGEventTypes"` (the methods are gated by the `CGEventTypes` feature in `CGEventSource.rs`; without it the symbols are not in scope) |
+| `CGWindowListCopyWindowInfo`, `CGWindowID` | same `objc2-core-graphics = "0.3"` | feature required: `"CGWindow"` |
+| `CGRect`, `CGPoint`, geometry helpers | same `objc2-core-graphics = "0.3"` | feature required: `"CGGeometry"` |
+| `AXUIElementCreateSystemWide`, `AXUIElementCopyAttributeValue`, **`AXUIElementCopyParameterizedAttributeValue`** (required for the caret-bounds fetch — `kAXBoundsForRangeParameterizedAttribute` is a parameterized attribute and cannot be retrieved via the non-parameterized call), `AXValueGetValue`, `AXIsProcessTrusted`, `AXIsProcessTrustedWithOptions`, `AXUIElementSetMessagingTimeout` | new `objc2-application-services = "0.3"` | features required: `"HIServices"` (umbrella for all AX function exports — every AX function the spec uses requires this), `"AXUIElement"`, `"AXValue"`, `"AXError"` |
+| String constants: `kAXFocusedUIElementAttribute`, `kAXSelectedTextRangeAttribute`, `kAXBoundsForRangeParameterizedAttribute` | same `objc2-application-services = "0.3"` | features required: `"AXAttributeConstants"` plus `"HIServices"` |
+| `kAXValueCGRectType` | same `objc2-application-services = "0.3"` | features required: `"AXValueConstants"` plus `"HIServices"` |
+| `kAXTrustedCheckOptionPrompt` | `objc2-application-services` 0.3.2 exports this under `"AXUIElement"` + `"HIServices"` features | Prefer the crate path when on 0.3.2+. The spec keeps an `extern "C"` fallback documented for older crate versions or for the case where a pinned 0.3.x lacks the symbol, but do NOT default to the extern path if the crate exposes it. Plan stage verifies the pinned version. |
 
 Plan stage will pin exact versions consistent with `objc2 = "0.6"`. The `objc2-core-graphics` and `objc2-application-services` crates are gated behind `#[cfg(target_os = "macos")]` so non-macOS builds remain dependency-free (the stub `WorkspaceObserver` referenced below does not pull these crates in).
 
-`kAXTrustedCheckOptionPrompt` is the one symbol the spec commits to declaring via an `extern "C"` block + `#[link(name = "ApplicationServices", kind = "framework")]` rather than depending on the crate, because it is not reliably exported in the 0.3 line. Plan stage may collapse this if a later crate version exposes it. All other AX symbols come from the crate with the features listed above.
+`kAXTrustedCheckOptionPrompt` is exported by `objc2-application-services` 0.3.2 under `"AXUIElement"` + `"HIServices"`, so the crate path is the default. An `extern "C"` block + `#[link(name = "ApplicationServices", kind = "framework")]` fallback remains documented for the case where a future pinned crate version drops the symbol or the build pins to an older 0.3.x. Plan stage verifies the pinned version. All other AX symbols come from the crate with the features listed above.
 
 ### Module layout
 
@@ -158,7 +173,7 @@ Plan stage will pin exact versions consistent with `objc2 = "0.6"`. The `objc2-c
 
 - `src/workspace.rs` (~250 lines, new):
   - `WorkspaceObserver` — owns last-known counter values, last-poll timestamps per source, AX permission state, cached editor-bundle-id list, a `prompted_for_accessibility_at_startup: bool` flag.
-  - `fn tick(&mut self, now: Instant) -> &WorkspaceSnapshot` — polls all sources at their respective cadences, updates the snapshot, returns a reference. Called from the app's main loop.
+  - `fn tick(&mut self, now: Instant) -> WorkspaceTick` — polls all sources at their respective cadences, updates the internal snapshot, computes whether AX trust state flipped, and returns an **owned** `WorkspaceTick` (cloning the snapshot). Returning by value (not a reference) is intentional: the app needs to call other `&mut self` methods (`sync_settings_window`, command dispatch) immediately after `tick()`, and a `&WorkspaceSnapshot` would borrow the observer for too long. The snapshot is cheap (~80 bytes plus an optional `String` for `frontmost_bundle_id`); clone cost is negligible at 500 ms cadence.
   - **Two distinct AX-prompt entry points**, deliberately not unified:
     - `fn request_accessibility_on_startup_if_enabled(&mut self, avoid_text_cursor: bool)` — called once **after settings have been loaded and applied**, NOT in the bare `DesktopPetApp::init`. The correct hook is immediately after the existing `self.apply_settings(settings)` call inside the window-creation path (`app.rs:162`), because that is the first point at which the on-disk `avoid_text_cursor` value is known. Calling earlier (in `init`) would use the default `true` and prompt a user who has the toggle off on disk. The caller passes `self.settings.avoid_text_cursor` explicitly because `WorkspaceObserver` deliberately does NOT own `Settings` (the observer is a fact-reporter, not a config consumer; passing settings in keeps the dependency direction one-way). No-op if `prompted_for_accessibility_at_startup == true` OR the passed `avoid_text_cursor` is false. On the first call where both gates pass, calls `AXIsProcessTrustedWithOptions(@{kAXTrustedCheckOptionPrompt: @YES})` and flips the flag. "Polite once on startup" semantics.
     - `fn request_accessibility_now(&mut self)` — called in response to `AppCommand::RequestAccessibilityPermission`. Always calls `AXIsProcessTrustedWithOptions(@{kAXTrustedCheckOptionPrompt: @YES})` regardless of the `prompted_at_startup` flag. macOS itself decides whether to actually display the system dialog (fresh state → dialog shown; sticky denial → dialog may be suppressed). We do NOT try to programmatically tell those two states apart; both look the same to `AXIsProcessTrusted()` until the user acts. The Rust side just guarantees the prompt request is invoked every time. The ax_status_label inline hint (see settings_window_macos.rs section) covers user guidance for the "no dialog appeared" case with neutral wording.
@@ -213,7 +228,7 @@ Plan stage will pin exact versions consistent with `objc2 = "0.6"`. The `objc2-c
 - `src/settings_window_macos.rs` (extended):
   - **Panel resize is required.** Today the panel is `PANEL_WIDTH=420.0` × `PANEL_HEIGHT=370.0` (lines 44-45), with hard-coded y positions from title at 322 down to the bottom button row at 28. There is no room for a section heading + 3 checkboxes + multi-line label + button without overlap. The spec requires:
     - Increase `PANEL_HEIGHT` from `370.0` to `560.0` (adds 190 pt = enough for a 28-pt heading, three 24-pt checkboxes with 8-pt spacing, a ~50-pt multi-line label, an 8-pt gap, and a 30-pt button, plus margins).
-    - Shift every existing control upward by `+190.0` in its y coordinate so the existing layout sits unchanged in the top portion of the resized panel. Concretely: title `322 → 512`, every other `setFrame(rect(_, y, _, _))` call adds 190 to `y`. The "Workspace Awareness" block fills the new `28..218` y range below.
+    - Shift every existing control upward by `+190.0` in its y coordinate so the existing layout sits unchanged in the top portion of the resized panel. Concretely: title `322 → 512`, every other `setFrame(rect(_, y, _, _))` call adds 190 to `y`. The shifted bottom button row sits with its bottom edge at y=218 (was 28, +190). The new "Workspace Awareness" block occupies the **`22..212` y range** below it (button row at y=22 height 28, label at y=58 height 36, three checkboxes ending at y=190+22=212 with the heading on top). 6-pt gap between block top (212) and button-row bottom (218); no overlap.
     - The new block, top-down within the new range, with `MARGIN_X` matching existing usage:
       - Section heading `NSTextField` (bold, non-editable) at `y=190`, height 22.
       - "Follow cursor when idle" checkbox at `y=158`, height 22.
@@ -228,14 +243,14 @@ Plan stage will pin exact versions consistent with `objc2 = "0.6"`. The `objc2-c
     - Add `Retained<NSButton>` fields for `follow_cursor_when_idle_button`, `avoid_text_cursor_button`, `hide_on_fullscreen_button`, `rerequest_accessibility_button` (the last is a push button, retained for enable/disable on visibility-state changes if needed).
     - Add `Retained<NSTextField>` for `ax_status_label`.
     - Extend `sync_settings(&self, settings: &AppSettings, ax_trusted: bool)` (signature change — adds `ax_trusted` so the controller can set the label text based on permission state). The sync routine sets each checkbox's `state` from the matching setting, sets the label text to the neutral guidance string when `settings.avoid_text_cursor && !ax_trusted`, otherwise clears it.
-    - **All callsites** of `sync_settings` get the new arg. `grep -n 'sync_settings\b' src/app.rs` shows two direct `settings_window.sync_settings(...)` invocations plus the wrapper method `sync_settings_window` which itself has additional callers. To compile clean, four locations must be updated:
+    - **All callsites** of `sync_settings` get the new arg. `grep -n 'sync_settings\b' src/app.rs` shows two direct `settings_window.sync_settings(...)` invocations plus the wrapper method `sync_settings_window` which itself has additional callers. To compile clean, **five locations** must be updated (four in `src/app.rs`, one in the non-macOS stub):
       - `DesktopPetApp::sync_settings_window` (app.rs:528-532) — change body from `settings_window.sync_settings(&self.settings)` to `settings_window.sync_settings(&self.settings, self.workspace_observer.is_accessibility_trusted())`.
       - `DesktopPetApp::open_settings_window` (app.rs:521) — direct `settings_window.sync_settings(&self.settings)` invocation, update identically.
       - `DesktopPetApp::apply_settings` (app.rs:327) — calls `self.sync_settings_window()`; since `sync_settings_window`'s signature stays unchanged (it sources `ax_trusted` internally), this caller needs no change. But verify the path works: `apply_settings` runs `sync_settings_window` after settings change, and the observer's trust state is independent of settings, so the sync now correctly carries both.
       - `DesktopPetApp::set_pet_visible` (app.rs:377) — same: calls `self.sync_settings_window()`, no change needed.
       - The non-macOS stub of `SettingsWindowController::sync_settings` (if it exists today) gains the `_ax_trusted: bool` arg, ignored, so cross-platform builds compile.
     - `WorkspaceObserver::is_accessibility_trusted(&self) -> bool` — new cheap accessor wrapping `AXIsProcessTrusted()` (no prompt). Non-macOS stub returns `true` so the label stays blank on those builds.
-    - **Trust-state freshness while Settings is open.** The user can grant AX permission in System Settings without closing our Settings window; the label needs to refresh without explicit user action. Each `observer.tick()` (which already runs every ~500 ms) compares `is_accessibility_trusted()` against a cached `last_known_ax_trusted: bool`. On any transition, the observer flags `trust_changed_this_tick = true` and the app's tick handler calls `self.sync_settings_window()` immediately after `observer.tick()` returns. No new polling cadence is introduced — we piggyback on the existing observer poll. The label refreshes within one observer tick (~500 ms) of the user granting/revoking permission in System Settings.
+    - **Trust-state freshness while Settings is open.** The user can grant AX permission in System Settings without closing our Settings window; the label needs to refresh without explicit user action. Each `observer.tick()` (which already runs every ~500 ms) compares `is_accessibility_trusted()` against a cached `last_known_ax_trusted: bool`. On any transition, the observer reports `trust_changed = true` in the returned `WorkspaceTick`, and the app's tick handler calls `self.sync_settings_window()` after consuming the `WorkspaceTick` (the owned-return shape from §workspace.rs makes this borrow-clean). No new polling cadence is introduced — we piggyback on the existing observer poll. The label refreshes within one observer tick (~500 ms) of the user granting/revoking permission in System Settings.
 
 - `src/menu_bar.rs` — extended with four new tag constants in the existing 11xx range (settings-control tags, not menu-item tags):
   ```rust
@@ -280,7 +295,9 @@ Plan stage will pin exact versions consistent with `objc2 = "0.6"`. The `objc2-c
 ```
 app.rs main loop
    │
-   ├─► observer.tick(now)  ──► WorkspaceSnapshot
+   ├─► let tick = observer.tick(now);   // owned WorkspaceTick — releases &mut observer
+   ├─► let snapshot = tick.snapshot;
+   ├─► if tick.trust_changed { self.sync_settings_window(); }   // safe: observer no longer borrowed
    │       │
    │       ├─ poll CGEventSourceSecondsSinceLastEventType         (every tick, ~µs)
    │       ├─ poll CGEventSourceCounterForEventType + delta       (every tick)
@@ -312,7 +329,9 @@ app.rs main loop
                                       // apply_window_visibility()
 ```
 
-The snapshot is consumed and dropped per tick — no shared mutable state between modules. `pet.rs` and `window_macos.rs` see only the resolved intent / boolean. Policy lives in `app.rs::decide_intent`, observation lives in `workspace.rs`. Each is testable in isolation.
+The snapshot is owned and dropped per tick — no shared mutable state between modules, and no `&WorkspaceSnapshot` borrow lingers across the observer-callback boundary. `pet.rs` and `window_macos.rs` see only the resolved intent / boolean. Policy lives in `app.rs::decide_intent`, observation lives in `workspace.rs`. Each is testable in isolation.
+
+**Sequencing constraint** for command dispatch (e.g., `AppCommand::SetAvoidTextCursor(true)` calling `is_accessibility_trusted()` then `request_accessibility_now()`): command dispatch happens outside the `tick → snapshot consumed` window. Don't structure the tick loop in a way that fires a queued command while holding a snapshot reference (there isn't one any more — it's owned — but don't reintroduce one).
 
 ## Error handling and degradation
 
@@ -401,6 +420,8 @@ Command dispatch (in `app.rs`):
 - `AppCommand::RequestAccessibilityPermission` always calls `request_accessibility_now()` regardless of `prompted_for_accessibility_at_startup`. Fake observer test verifies the call lands every time it is dispatched, even after the startup-once path has already run.
 - `request_accessibility_on_startup_if_enabled(true)` prompts on the first call and is a no-op on subsequent calls (idempotent via the `prompted_at_startup` flag).
 - `request_accessibility_on_startup_if_enabled(false)` is always a no-op regardless of flag state.
+- **`AppCommand::SetAvoidTextCursor(true)` when AX is already trusted**: fake observer reports `is_accessibility_trusted() = true`; assert that `request_accessibility_now()` is NOT called on the observer (no redundant prompt invocation; no log line about prompting). Complements the existing "if NOT trusted → call request_accessibility_now()" test.
+- **WorkspaceTick borrow-release**: a unit test that constructs the observer, calls `tick()`, drops the returned `WorkspaceTick` into a local, then re-borrows the observer mutably via `is_accessibility_trusted()` — purely a compile-fence test (would fail to compile if `tick()` returned `&WorkspaceSnapshot`). Lives behind `#[cfg(test)]`.
 
 Pure tag → command logic (extracted out of `command_target_macos.rs` for testability):
 - A new helper `pub(crate) fn settings_command_for_button(tag: isize, state_is_on: bool) -> Option<AppCommand>` lives in `menu_bar.rs` (alongside the existing `command_from_tag`). It is pure Rust — no Obj-C, no `unsafe`. The `dispatchSettingsValue:` arms for boolean checkboxes call this helper after reading `NSButton.state` into a plain `bool`. Unit tests target this pure helper:
@@ -440,6 +461,10 @@ Smoke scenarios:
 - Type rapidly in Notes (non-editor) → pet recognizes busy via typing rate.
 - Two displays, pet on display 1, fullscreen on display 2 → pet stays visible.
 - Drag pet while entering fullscreen → drag terminates cleanly, pet hides.
+- **Enable "Avoid text-cursor area" while AX is denied** → checkbox stays checked AND `ax_status_label` displays the neutral guidance string. Pet does not crash; caret avoidance is silently inert.
+- **Grant AX permission in System Settings while Settings window is open** → `ax_status_label` clears within ~500 ms without any user interaction in the app. Confirms the trust-transition + settings-open tick branch.
+- **Hide the pet (Settings stays open), then grant AX permission in System Settings** → label still clears within ~500 ms. Confirms the settings-visible branch wins over `!pet_visible` in `next_tick_interval`.
+- **Open Settings, click "Re-request Accessibility permission" after a sticky denial** → call lands every time (no internal no-op); macOS may or may not show a dialog (sticky-denial behavior is out of our control); the inline label remains visible until the user clears the entry in System Settings → Privacy & Security → Accessibility and re-clicks.
 
 ### What we don't test
 
