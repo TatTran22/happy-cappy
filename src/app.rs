@@ -147,10 +147,7 @@ impl DesktopPetApp {
             .with_title("Happy Cappy")
             .with_inner_size({
                 let (fw, fh) = self.pet.frame_size();
-                LogicalSize::new(
-                    (fw * WINDOW_SCALE) as f64,
-                    (fh * WINDOW_SCALE) as f64,
-                )
+                LogicalSize::new((fw * WINDOW_SCALE) as f64, (fh * WINDOW_SCALE) as f64)
             })
             .with_resizable(false)
             .with_decorations(false)

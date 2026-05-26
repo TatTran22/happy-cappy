@@ -5,7 +5,6 @@ use crate::micro_action::{ActionOverride, MicroAction};
 use crate::pet::manifest::PetManifest;
 use crate::pet::resolver::{lookup_with_fallback, resolve_animation_chain};
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Personality {

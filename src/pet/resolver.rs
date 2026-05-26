@@ -81,7 +81,12 @@ mod tests {
             id: "fixture".into(),
             display_name: "Fixture".into(),
             spritesheet_path: "x.png".into(),
-            frame: FrameGeometry { width: 16, height: 16, columns: 4, rows: 1 },
+            frame: FrameGeometry {
+                width: 16,
+                height: 16,
+                columns: 4,
+                rows: 1,
+            },
             animations,
         }
     }
@@ -95,15 +100,17 @@ mod tests {
             resolve_animation_chain(BehaviorMode::Hovered, Personality::Cheerful, 0, None);
         assert_eq!(cheerful, &["hover-cheerful", "hover", "idle"]);
 
-        let lively =
-            resolve_animation_chain(BehaviorMode::Hovered, Personality::Lively, 0, None);
+        let lively = resolve_animation_chain(BehaviorMode::Hovered, Personality::Lively, 0, None);
         assert_eq!(lively, &["hover-lively", "hover", "idle"]);
     }
 
     #[test]
     fn chain_for_default_cycles_through_5_expressions() {
         let p = Personality::Cheerful;
-        assert_eq!(resolve_animation_chain(BehaviorMode::Default, p, 0, None), &["idle"]);
+        assert_eq!(
+            resolve_animation_chain(BehaviorMode::Default, p, 0, None),
+            &["idle"]
+        );
         assert_eq!(
             resolve_animation_chain(BehaviorMode::Default, p, 1, None),
             &["blink", "idle"]
@@ -120,7 +127,10 @@ mod tests {
             resolve_animation_chain(BehaviorMode::Default, p, 4, None),
             &["sleepy", "idle"]
         );
-        assert_eq!(resolve_animation_chain(BehaviorMode::Default, p, 5, None), &["idle"]);
+        assert_eq!(
+            resolve_animation_chain(BehaviorMode::Default, p, 5, None),
+            &["idle"]
+        );
     }
 
     #[test]
@@ -142,30 +152,19 @@ mod tests {
 
     #[test]
     fn chain_for_walking_uses_walk_right_then_walk_then_idle() {
-        let chain = resolve_animation_chain(
-            BehaviorMode::Walking,
-            Personality::Cheerful,
-            0,
-            None,
-        );
+        let chain = resolve_animation_chain(BehaviorMode::Walking, Personality::Cheerful, 0, None);
         assert_eq!(chain, &["walk-right", "walk", "idle"]);
     }
 
     #[test]
     fn chain_for_dragging_is_drag_then_idle() {
-        let chain = resolve_animation_chain(
-            BehaviorMode::Dragging,
-            Personality::Cheerful,
-            0,
-            None,
-        );
+        let chain = resolve_animation_chain(BehaviorMode::Dragging, Personality::Cheerful, 0, None);
         assert_eq!(chain, &["drag", "idle"]);
     }
 
     #[test]
     fn chain_for_hidden_is_idle_only() {
-        let chain =
-            resolve_animation_chain(BehaviorMode::Hidden, Personality::Cheerful, 0, None);
+        let chain = resolve_animation_chain(BehaviorMode::Hidden, Personality::Cheerful, 0, None);
         assert_eq!(chain, &["idle"]);
     }
 

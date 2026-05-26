@@ -42,8 +42,13 @@ pub enum ManifestError {
     EmptyField(&'static str),
     InvalidIdChars,
     ZeroGeometry,
-    EmptyAnimation { name: String },
-    TooManyFrames { name: String, count: usize },
+    EmptyAnimation {
+        name: String,
+    },
+    TooManyFrames {
+        name: String,
+        count: usize,
+    },
     SpriteIndexOutOfBounds {
         animation: String,
         frame_pos: usize,
@@ -181,7 +186,10 @@ mod tests {
         assert_eq!(manifest.manifest_version, 1);
         assert_eq!(manifest.animations.len(), 10);
         assert_eq!(manifest.animations["idle"].frames, vec![0, 1, 2, 3]);
-        assert_eq!(manifest.animations["walk-right"].frames, vec![32, 33, 34, 35]);
+        assert_eq!(
+            manifest.animations["walk-right"].frames,
+            vec![32, 33, 34, 35]
+        );
         assert_eq!(manifest.animations["drag"].frames, vec![36, 37, 38, 39]);
     }
 
@@ -221,7 +229,11 @@ mod tests {
         let err = PetManifest::from_json_str(json).unwrap_err();
         assert!(matches!(
             err,
-            ManifestError::SpriteIndexOutOfBounds { index: 99, max: 4, .. }
+            ManifestError::SpriteIndexOutOfBounds {
+                index: 99,
+                max: 4,
+                ..
+            }
         ));
     }
 
@@ -293,7 +305,10 @@ mod tests {
             frames
         );
         let err = PetManifest::from_json_str(&json).unwrap_err();
-        assert!(matches!(err, ManifestError::TooManyFrames { count: 65, .. }));
+        assert!(matches!(
+            err,
+            ManifestError::TooManyFrames { count: 65, .. }
+        ));
     }
 
     #[test]

@@ -71,18 +71,12 @@ pub struct SpriteSheet {
 }
 
 impl SpriteSheet {
-    pub fn load(
-        path: impl AsRef<Path>,
-        geometry: &FrameGeometry,
-    ) -> Result<Self, SpriteError> {
+    pub fn load(path: impl AsRef<Path>, geometry: &FrameGeometry) -> Result<Self, SpriteError> {
         let image = image::open(path)?.into_rgba8();
         Self::from_image(image, geometry)
     }
 
-    pub fn from_image(
-        image: RgbaImage,
-        geometry: &FrameGeometry,
-    ) -> Result<Self, SpriteError> {
+    pub fn from_image(image: RgbaImage, geometry: &FrameGeometry) -> Result<Self, SpriteError> {
         let width = image.width();
         let height = image.height();
         let expected_width = geometry.width.checked_mul(geometry.columns);
@@ -139,53 +133,65 @@ mod tests {
     }
 
     fn happy_cappy_geometry() -> FrameGeometry {
-        FrameGeometry { width: 64, height: 64, columns: 4, rows: 10 }
+        FrameGeometry {
+            width: 64,
+            height: 64,
+            columns: 4,
+            rows: 10,
+        }
     }
 
     #[test]
     fn frame_rect_for_zero_returns_top_left() {
-        let sheet =
-            SpriteSheet::from_image(sheet(256, 640), &happy_cappy_geometry())
-                .unwrap();
+        let sheet = SpriteSheet::from_image(sheet(256, 640), &happy_cappy_geometry()).unwrap();
         assert_eq!(
             sheet.frame_rect(0),
-            FrameRect { x: 0, y: 0, width: 64, height: 64 }
+            FrameRect {
+                x: 0,
+                y: 0,
+                width: 64,
+                height: 64
+            }
         );
     }
 
     #[test]
     fn frame_rect_for_32_returns_walk_row_first_column() {
-        let sheet =
-            SpriteSheet::from_image(sheet(256, 640), &happy_cappy_geometry())
-                .unwrap();
+        let sheet = SpriteSheet::from_image(sheet(256, 640), &happy_cappy_geometry()).unwrap();
         assert_eq!(
             sheet.frame_rect(32),
-            FrameRect { x: 0, y: 8 * 64, width: 64, height: 64 }
+            FrameRect {
+                x: 0,
+                y: 8 * 64,
+                width: 64,
+                height: 64
+            }
         );
     }
 
     #[test]
     fn frame_rect_for_39_returns_drag_row_last_column() {
-        let sheet =
-            SpriteSheet::from_image(sheet(256, 640), &happy_cappy_geometry())
-                .unwrap();
+        let sheet = SpriteSheet::from_image(sheet(256, 640), &happy_cappy_geometry()).unwrap();
         assert_eq!(
             sheet.frame_rect(39),
-            FrameRect { x: 3 * 64, y: 9 * 64, width: 64, height: 64 }
+            FrameRect {
+                x: 3 * 64,
+                y: 9 * 64,
+                width: 64,
+                height: 64
+            }
         );
     }
 
     #[test]
     fn from_image_rejects_mismatched_dimensions() {
-        let err = SpriteSheet::from_image(sheet(250, 640), &happy_cappy_geometry())
-            .unwrap_err();
+        let err = SpriteSheet::from_image(sheet(250, 640), &happy_cappy_geometry()).unwrap_err();
         assert!(matches!(err, SpriteError::InvalidDimensions { .. }));
     }
 
     #[test]
     fn from_image_accepts_matching_image() {
-        let result =
-            SpriteSheet::from_image(sheet(256, 640), &happy_cappy_geometry());
+        let result = SpriteSheet::from_image(sheet(256, 640), &happy_cappy_geometry());
         assert!(result.is_ok());
     }
 }
