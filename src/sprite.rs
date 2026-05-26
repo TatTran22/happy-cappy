@@ -3,6 +3,7 @@ use std::{error::Error, fmt, path::Path};
 use image::RgbaImage;
 
 use crate::pet::AnimationGroup;
+use crate::pet::manifest::FrameGeometry;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpriteRow {
@@ -150,6 +151,54 @@ impl SpriteSheet {
             height: self.frame_size,
         }
     }
+
+    pub fn from_image_with_geometry(
+        image: RgbaImage,
+        geometry: &FrameGeometry,
+    ) -> Result<Self, SpriteError> {
+        let width = image.width();
+        let height = image.height();
+        let expected_width = geometry.width.checked_mul(geometry.columns);
+        let expected_height = geometry.height.checked_mul(geometry.rows);
+
+        if geometry.width == 0
+            || geometry.height == 0
+            || geometry.columns == 0
+            || geometry.rows == 0
+            || Some(width) != expected_width
+            || Some(height) != expected_height
+        {
+            return Err(SpriteError::InvalidDimensions {
+                width,
+                height,
+                expected_width,
+                expected_height,
+                frame_size: geometry.width.max(geometry.height),
+            });
+        }
+
+        Ok(Self { image, frame_size: geometry.width })
+    }
+
+    pub fn load_with_geometry(
+        path: impl AsRef<std::path::Path>,
+        geometry: &FrameGeometry,
+    ) -> Result<Self, SpriteError> {
+        let image = image::open(path)?.into_rgba8();
+        Self::from_image_with_geometry(image, geometry)
+    }
+
+    pub fn frame_rect_by_index(&self, sprite_index: u32) -> FrameRect {
+        let columns = (self.image.width() / self.frame_size).max(1);
+        let row = sprite_index / columns;
+        let col = sprite_index % columns;
+        FrameRect {
+            x: col * self.frame_size,
+            y: row * self.frame_size,
+            width: self.frame_size,
+            height: self.frame_size,
+        }
+    }
 }
 
 impl From<AnimationGroup> for SpriteRow {
@@ -276,5 +325,58 @@ mod tests {
         for (group, row) in cases {
             assert_eq!(SpriteRow::from(group), row);
         }
+    }
+
+    use crate::pet::manifest::FrameGeometry;
+
+    fn happy_cappy_geometry() -> FrameGeometry {
+        FrameGeometry { width: 64, height: 64, columns: 4, rows: 10 }
+    }
+
+    #[test]
+    fn frame_rect_by_index_for_zero_returns_top_left() {
+        let sheet =
+            SpriteSheet::from_image_with_geometry(sheet(256, 640), &happy_cappy_geometry())
+                .unwrap();
+        assert_eq!(
+            sheet.frame_rect_by_index(0),
+            FrameRect { x: 0, y: 0, width: 64, height: 64 }
+        );
+    }
+
+    #[test]
+    fn frame_rect_by_index_for_32_returns_walk_row_first_column() {
+        let sheet =
+            SpriteSheet::from_image_with_geometry(sheet(256, 640), &happy_cappy_geometry())
+                .unwrap();
+        assert_eq!(
+            sheet.frame_rect_by_index(32),
+            FrameRect { x: 0, y: 8 * 64, width: 64, height: 64 }
+        );
+    }
+
+    #[test]
+    fn frame_rect_by_index_for_39_returns_drag_row_last_column() {
+        let sheet =
+            SpriteSheet::from_image_with_geometry(sheet(256, 640), &happy_cappy_geometry())
+                .unwrap();
+        assert_eq!(
+            sheet.frame_rect_by_index(39),
+            FrameRect { x: 3 * 64, y: 9 * 64, width: 64, height: 64 }
+        );
+    }
+
+    #[test]
+    fn from_image_with_geometry_rejects_mismatched_dimensions() {
+        let err = SpriteSheet::from_image_with_geometry(sheet(250, 640), &happy_cappy_geometry())
+            .unwrap_err();
+        assert!(matches!(err, SpriteError::InvalidDimensions { .. }));
+    }
+
+    #[test]
+    fn from_image_with_geometry_accepts_matching_image() {
+        let result =
+            SpriteSheet::from_image_with_geometry(sheet(256, 640), &happy_cappy_geometry());
+        assert!(result.is_ok());
     }
 }
