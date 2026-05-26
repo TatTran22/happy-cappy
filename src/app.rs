@@ -26,9 +26,7 @@ use crate::{
     window_macos::{apply_desktop_pet_window_behavior, set_pet_window_mouse_passthrough},
 };
 
-pub const FRAME_SIZE: u32 = 64;
 pub const WINDOW_SCALE: u32 = 2;
-pub const WINDOW_SIZE: u32 = FRAME_SIZE * WINDOW_SCALE;
 
 const TARGET_FRAME_TIME: Duration = Duration::from_millis(16);
 const IDLE_FRAME_TIME: Duration = Duration::from_millis(200);
@@ -147,7 +145,13 @@ impl DesktopPetApp {
     fn create_window(&mut self, event_loop: &ActiveEventLoop) -> bool {
         let attributes = WindowAttributes::default()
             .with_title("Happy Cappy")
-            .with_inner_size(LogicalSize::new(WINDOW_SIZE as f64, WINDOW_SIZE as f64))
+            .with_inner_size({
+                let (fw, fh) = self.pet.frame_size();
+                LogicalSize::new(
+                    (fw * WINDOW_SCALE) as f64,
+                    (fh * WINDOW_SCALE) as f64,
+                )
+            })
             .with_resizable(false)
             .with_decorations(false)
             .with_transparent(true);
@@ -182,8 +186,8 @@ impl DesktopPetApp {
             Arc::clone(&window),
             surface_size.width,
             surface_size.height,
-            FRAME_SIZE,
-            FRAME_SIZE,
+            self.pet.frame_size().0,
+            self.pet.frame_size().1,
         ) {
             Ok(renderer) => {
                 self.renderer = Some(renderer);
@@ -212,7 +216,7 @@ impl DesktopPetApp {
             }
         };
 
-        match SpriteSheet::load(&paths.sprite_sheet, FRAME_SIZE) {
+        match SpriteSheet::load_with_geometry(&paths.sprite_sheet, &self.pet.manifest().frame) {
             Ok(sprite_sheet) => {
                 self.sprite_sheet = Some(sprite_sheet);
                 true
@@ -352,9 +356,10 @@ impl DesktopPetApp {
         self.pet.set_hover_intensity(settings.hover_intensity);
         self.pet.set_hidden(!settings.pet_visible);
         self.pet_visible = settings.pet_visible;
+        let (fw, fh) = self.pet.frame_size();
         self.physics.size = Vec2 {
-            x: FRAME_SIZE as f32 * settings.scale,
-            y: FRAME_SIZE as f32 * settings.scale,
+            x: fw as f32 * settings.scale,
+            y: fh as f32 * settings.scale,
         };
 
         let had_restored_position = settings.last_position.is_some();
@@ -856,8 +861,8 @@ fn default_physics() -> Physics {
         position: Vec2 { x: 120.0, y: 120.0 },
         velocity: Vec2 { x: 0.0, y: 0.0 },
         size: Vec2 {
-            x: WINDOW_SIZE as f32,
-            y: WINDOW_SIZE as f32,
+            x: (64 * WINDOW_SCALE) as f32,
+            y: (64 * WINDOW_SCALE) as f32,
         },
         bounds: Bounds {
             min_x: 0.0,
@@ -1224,8 +1229,8 @@ mod tests {
         assert_eq!(
             app.physics.size,
             Vec2 {
-                x: FRAME_SIZE as f32 * AppSettings::MAX_SCALE,
-                y: FRAME_SIZE as f32 * AppSettings::MAX_SCALE,
+                x: 64.0 * AppSettings::MAX_SCALE,
+                y: 64.0 * AppSettings::MAX_SCALE,
             }
         );
     }
