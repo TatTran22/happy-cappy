@@ -25,6 +25,10 @@ impl ActionOverride {
         self.remaining
     }
 
+    pub fn action(&self) -> MicroAction {
+        self.action
+    }
+
     pub fn animation_group(&self) -> AnimationGroup {
         match self.action {
             MicroAction::Nap => AnimationGroup::Sleepy,
@@ -81,5 +85,14 @@ mod tests {
         assert_eq!(action.remaining(), Duration::from_secs(1));
         assert!(action.tick(Duration::from_secs(1)));
         assert_eq!(action.remaining(), Duration::ZERO);
+    }
+
+    #[test]
+    fn action_accessor_returns_underlying_kind() {
+        let nap = ActionOverride::new(MicroAction::Nap);
+        assert_eq!(nap.action(), MicroAction::Nap);
+
+        let cheer = ActionOverride::new(MicroAction::CheerUp);
+        assert_eq!(cheer.action(), MicroAction::CheerUp);
     }
 }
