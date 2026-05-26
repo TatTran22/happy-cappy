@@ -216,7 +216,7 @@ impl DesktopPetApp {
             }
         };
 
-        match SpriteSheet::load_with_geometry(&paths.sprite_sheet, &self.pet.manifest().frame) {
+        match SpriteSheet::load(&paths.sprite_sheet, &self.pet.manifest().frame) {
             Ok(sprite_sheet) => {
                 self.sprite_sheet = Some(sprite_sheet);
                 true
@@ -745,7 +745,7 @@ impl DesktopPetApp {
         let sprite_index = self.pet.current_sprite_index();
         let flip_x = self.pet.current_animation_name() == "walk-right"
             && self.pet.direction() == Direction::Left;
-        let rect = sprite_sheet.frame_rect_by_index(sprite_index);
+        let rect = sprite_sheet.frame_rect(sprite_index);
 
         if let Err(error) = renderer.draw(sprite_sheet.image(), rect, flip_x) {
             warn!("failed to draw desktop pet frame: {error}");
@@ -765,7 +765,7 @@ impl DesktopPetApp {
             return false;
         };
         let sprite_index = self.pet.current_sprite_index();
-        let rect = sprite_sheet.frame_rect_by_index(sprite_index);
+        let rect = sprite_sheet.frame_rect(sprite_index);
         let scale = if self.settings.scale.is_finite() && self.settings.scale > 0.0 {
             self.settings.scale
         } else {
@@ -1284,10 +1284,7 @@ mod tests {
         assert!(app.handle_non_quit_command_for_test(AppCommand::Nap));
 
         assert_eq!(app.pet.behavior_mode(), crate::pet::BehaviorMode::Action);
-        assert_eq!(
-            app.pet.current_animation_group(),
-            crate::pet::AnimationGroup::Sleepy
-        );
+        assert_eq!(app.pet.current_animation_name(), "sleepy");
     }
 
     #[test]
@@ -1298,10 +1295,7 @@ mod tests {
         assert!(app.handle_non_quit_command_for_test(AppCommand::CheerUp));
 
         assert_eq!(app.pet.behavior_mode(), crate::pet::BehaviorMode::Action);
-        assert_eq!(
-            app.pet.current_animation_group(),
-            crate::pet::AnimationGroup::Happy
-        );
+        assert_eq!(app.pet.current_animation_name(), "happy");
     }
 
     #[test]

@@ -27,20 +27,6 @@ pub enum BehaviorMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnimationGroup {
-    Idle,
-    Blink,
-    Happy,
-    Curious,
-    Sleepy,
-    HoverCalm,
-    HoverCheerful,
-    HoverLively,
-    WalkRight,
-    Drag,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PetState {
     Idle,
     Walk,
@@ -79,7 +65,6 @@ pub struct Pet {
     completed_walk_cycles: u32,
     personality: Personality,
     behavior_mode: BehaviorMode,
-    animation_group: AnimationGroup,
     expression_index: usize,
     expression_elapsed: Duration,
     movement_speed_multiplier: f32,
@@ -128,7 +113,6 @@ impl Pet {
             completed_walk_cycles: 0,
             personality: Personality::Cheerful,
             behavior_mode: BehaviorMode::Default,
-            animation_group: AnimationGroup::Idle,
             expression_index: 0,
             expression_elapsed: Duration::ZERO,
             movement_speed_multiplier: 1.0,
@@ -161,10 +145,6 @@ impl Pet {
 
     pub fn behavior_mode(&self) -> BehaviorMode {
         self.behavior_mode
-    }
-
-    pub fn current_animation_group(&self) -> AnimationGroup {
-        self.animation_group
     }
 
     pub fn current_animation_name(&self) -> &str {
@@ -437,24 +417,6 @@ impl Pet {
             BehaviorMode::Default
         };
 
-        self.animation_group = match self.behavior_mode {
-            BehaviorMode::Hidden => AnimationGroup::Idle,
-            BehaviorMode::Dragging => AnimationGroup::Drag,
-            BehaviorMode::Hovered => match self.personality {
-                Personality::Calm => AnimationGroup::HoverCalm,
-                Personality::Cheerful => AnimationGroup::HoverCheerful,
-                Personality::Lively => AnimationGroup::HoverLively,
-            },
-            BehaviorMode::Action => self
-                .action_override
-                .map(|action| action.animation_group())
-                .unwrap_or_else(|| self.default_expression_group()),
-            BehaviorMode::Walking => AnimationGroup::WalkRight,
-            BehaviorMode::Default => self.default_expression_group(),
-        };
-
-        // Compute string animation name alongside the legacy enum. The two
-        // values are kept in sync; the enum will be removed in a later task.
         let chain = resolve_animation_chain(
             self.behavior_mode,
             self.personality,
@@ -463,16 +425,6 @@ impl Pet {
         );
         let (name, _) = lookup_with_fallback(&self.manifest, chain);
         self.current_animation_name = name.to_string();
-    }
-
-    fn default_expression_group(&self) -> AnimationGroup {
-        match self.expression_index % 5 {
-            0 => AnimationGroup::Idle,
-            1 => AnimationGroup::Blink,
-            2 => AnimationGroup::Happy,
-            3 => AnimationGroup::Curious,
-            _ => AnimationGroup::Sleepy,
-        }
     }
 
     fn expression_interval(&self) -> Duration {
@@ -533,13 +485,13 @@ mod tests {
 
         pet.apply_personality(Personality::Calm);
         pet.set_hovered(true);
-        assert_eq!(pet.current_animation_group(), AnimationGroup::HoverCalm);
+        assert_eq!(pet.current_animation_name(), "hover-calm");
 
         pet.apply_personality(Personality::Cheerful);
-        assert_eq!(pet.current_animation_group(), AnimationGroup::HoverCheerful);
+        assert_eq!(pet.current_animation_name(), "hover-cheerful");
 
         pet.apply_personality(Personality::Lively);
-        assert_eq!(pet.current_animation_group(), AnimationGroup::HoverLively);
+        assert_eq!(pet.current_animation_name(), "hover-lively");
     }
 
     #[test]
@@ -551,7 +503,7 @@ mod tests {
         let tick = pet.tick(Duration::from_millis(100));
 
         assert_eq!(pet.behavior_mode(), BehaviorMode::Dragging);
-        assert_eq!(pet.current_animation_group(), AnimationGroup::Drag);
+        assert_eq!(pet.current_animation_name(), "drag");
         assert_eq!(tick.speed_x, 0.0);
     }
 
@@ -582,9 +534,9 @@ mod tests {
     #[test]
     fn expression_loop_advances_without_requiring_walk() {
         let mut pet = Pet::new();
-        let first = pet.current_animation_group();
+        let first = pet.current_animation_name().to_string();
         pet.tick(Duration::from_secs(3));
-        let second = pet.current_animation_group();
+        let second = pet.current_animation_name().to_string();
 
         assert_ne!(first, second);
         assert_eq!(pet.behavior_mode(), BehaviorMode::Default);
@@ -635,7 +587,7 @@ mod tests {
         pet.set_movement_speed_multiplier(0.0);
 
         assert_eq!(pet.behavior_mode(), BehaviorMode::Default);
-        assert_eq!(pet.current_animation_group(), AnimationGroup::Idle);
+        assert_eq!(pet.current_animation_name(), "idle");
     }
 
     #[test]
@@ -647,7 +599,7 @@ mod tests {
         let tick = pet.tick(Duration::from_millis(16));
 
         assert_eq!(pet.behavior_mode(), BehaviorMode::Action);
-        assert_eq!(pet.current_animation_group(), AnimationGroup::Sleepy);
+        assert_eq!(pet.current_animation_name(), "sleepy");
         assert_eq!(tick.speed_x, 0.0);
     }
 
@@ -659,12 +611,12 @@ mod tests {
         pet.tick(Duration::from_secs(7));
 
         assert_eq!(pet.behavior_mode(), BehaviorMode::Action);
-        assert_eq!(pet.current_animation_group(), AnimationGroup::Happy);
+        assert_eq!(pet.current_animation_name(), "happy");
 
         pet.tick(Duration::from_secs(1));
 
         assert_eq!(pet.behavior_mode(), BehaviorMode::Walking);
-        assert_eq!(pet.current_animation_group(), AnimationGroup::WalkRight);
+        assert_eq!(pet.current_animation_name(), "walk-right");
     }
 
     #[test]
@@ -675,12 +627,12 @@ mod tests {
         pet.set_hovered(true);
 
         assert_eq!(pet.behavior_mode(), BehaviorMode::Hovered);
-        assert_eq!(pet.current_animation_group(), AnimationGroup::HoverCheerful);
+        assert_eq!(pet.current_animation_name(), "hover-cheerful");
 
         pet.set_hovered(false);
 
         assert_eq!(pet.behavior_mode(), BehaviorMode::Action);
-        assert_eq!(pet.current_animation_group(), AnimationGroup::Happy);
+        assert_eq!(pet.current_animation_name(), "happy");
     }
 
     #[test]

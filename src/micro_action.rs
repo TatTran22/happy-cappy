@@ -1,4 +1,3 @@
-use crate::pet::AnimationGroup;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,13 +28,6 @@ impl ActionOverride {
         self.action
     }
 
-    pub fn animation_group(&self) -> AnimationGroup {
-        match self.action {
-            MicroAction::Nap => AnimationGroup::Sleepy,
-            MicroAction::CheerUp => AnimationGroup::Happy,
-        }
-    }
-
     pub fn disables_movement(&self) -> bool {
         matches!(self.action, MicroAction::Nap)
     }
@@ -60,20 +52,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn nap_last_30_seconds_and_uses_sleepy_group() {
+    fn nap_lasts_30_seconds_and_disables_movement() {
         let action = ActionOverride::new(MicroAction::Nap);
 
         assert_eq!(action.remaining(), Duration::from_secs(30));
-        assert_eq!(action.animation_group(), AnimationGroup::Sleepy);
         assert!(action.disables_movement());
     }
 
     #[test]
-    fn cheer_up_last_8_seconds_and_uses_happy_group() {
+    fn cheer_up_lasts_8_seconds_and_keeps_movement() {
         let action = ActionOverride::new(MicroAction::CheerUp);
 
         assert_eq!(action.remaining(), Duration::from_secs(8));
-        assert_eq!(action.animation_group(), AnimationGroup::Happy);
         assert!(!action.disables_movement());
     }
 
