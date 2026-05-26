@@ -467,6 +467,8 @@ impl DesktopPetApp {
                 self.save_settings();
             }
             AppCommand::SetAvoidTextCursor(value) => {
+                // TODO(Task 22): when enabling, check AX trust state and call
+                // workspace_observer.request_accessibility_now() if untrusted.
                 let mut settings = self.settings.clone();
                 settings.avoid_text_cursor = value;
                 self.apply_settings(settings);

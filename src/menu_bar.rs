@@ -285,8 +285,11 @@ mod tests {
     }
 
     #[test]
-    fn settings_command_for_button_returns_none_for_slider_tag() {
+    fn settings_command_for_button_returns_none_for_non_checkbox_tags() {
+        // Sliders, push buttons, and labels all route through other paths — never this helper.
         assert_eq!(settings_command_for_button(MENU_TAG_SCALE, true), None);
+        assert_eq!(settings_command_for_button(MENU_TAG_AX_STATUS_LABEL, true), None);
+        assert_eq!(settings_command_for_button(MENU_TAG_REREQUEST_ACCESSIBILITY, true), None);
     }
 
     #[test]
