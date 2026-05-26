@@ -86,6 +86,8 @@ A new module `src/workspace.rs` owns a `WorkspaceObserver` that polls the signal
 
 ```rust
 pub struct WorkspaceSnapshot {
+    pub workspace_available: bool,        // false on non-macOS stub builds; true on macOS once
+                                          //   the observer has produced at least one real poll.
     pub seconds_idle: f32,
     pub typing_rate_per_sec: f32,
     pub frontmost_bundle_id: Option<String>,
@@ -97,15 +99,19 @@ pub struct WorkspaceSnapshot {
 
 impl WorkspaceSnapshot {
     pub fn is_busy(&self) -> bool {
-        self.frontmost_is_editor
-            || self.typing_rate_per_sec > 1.0
-            || self.seconds_idle < 2.0
+        self.workspace_available && (
+            self.frontmost_is_editor
+                || self.typing_rate_per_sec > 1.0
+                || self.seconds_idle < 2.0
+        )
     }
     pub fn is_idle(&self) -> bool {
-        self.seconds_idle >= 5.0 && !self.is_busy()
+        self.workspace_available && self.seconds_idle >= 5.0 && !self.is_busy()
     }
 }
 ```
+
+The `workspace_available` gate makes both `is_busy()` and `is_idle()` return false when the observer can't actually observe (non-macOS stub, or before the first successful tick on macOS). `decide_intent` then naturally falls through to `Idle` for all three cursor/caret arms, and `fullscreen_active` is false-by-default, so the pet behaves exactly as today. This is more defensible than picking magic neutral values for `seconds_idle` — it future-proofs against any threshold change in `is_busy`.
 
 `is_busy` and `is_idle` are mutually exclusive but not exhaustive (the "in between" window from 2 s to 5 s of idleness is neither — the pet stays in its existing autonomous mode there).
 
@@ -152,7 +158,7 @@ If any specific AX symbol turns out not to be exposed by `objc2-application-serv
   - **Two distinct AX-prompt entry points**, deliberately not unified:
     - `fn request_accessibility_on_startup_if_enabled(&mut self, avoid_text_cursor: bool)` — called once during `DesktopPetApp` init. The caller passes `self.settings.avoid_text_cursor` explicitly because `WorkspaceObserver` deliberately does NOT own `Settings` (the observer is a fact-reporter, not a config consumer; passing settings in keeps the dependency direction one-way). No-op if `prompted_for_accessibility_at_startup == true` OR the passed `avoid_text_cursor` is false. On the first call where both gates pass, calls `AXIsProcessTrustedWithOptions(@{kAXTrustedCheckOptionPrompt: @YES})` and flips the flag. "Polite once on startup" semantics.
     - `fn request_accessibility_now(&mut self)` — called in response to `AppCommand::RequestAccessibilityPermission`. Always calls `AXIsProcessTrustedWithOptions(@{kAXTrustedCheckOptionPrompt: @YES})` regardless of the `prompted_at_startup` flag. macOS itself decides whether to actually display the system dialog: if the user previously denied, macOS shows the dialog again only if the user has since removed the entry from System Settings → Privacy → Accessibility. If macOS suppresses the dialog because the choice is sticky, we surface a one-shot log line and (plan-stage) optionally open System Settings to the Accessibility pane via `x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility`. The user-initiated path never silently no-ops on the Rust side.
-  - macOS-specific calls are behind `#[cfg(target_os = "macos")]`; other platforms get a stub `WorkspaceObserver` whose `tick` returns a default snapshot (idle = 0, no fullscreen, no caret, busy = false) and whose two prompt entry points are no-ops.
+  - macOS-specific calls are behind `#[cfg(target_os = "macos")]`; other platforms get a stub `WorkspaceObserver` whose `tick` returns a default snapshot with `workspace_available: false` and default zero/None field values, and whose two prompt entry points are no-ops. The `workspace_available` gate ensures `is_busy()` and `is_idle()` both return false regardless of the other zeroed fields, so the pet falls through to `Idle` on stub builds rather than accidentally tripping `seconds_idle < 2.0`.
 
 - `src/pet.rs` (extended):
   - New `BehaviorIntent` enum, **all variants pre-resolved to 1D**:
@@ -196,6 +202,12 @@ If any specific AX symbol turns out not to be exposed by `objc2-application-serv
 - `src/settings_window_macos.rs` (extended):
   - Three new `NSButton` checkboxes (`setButtonType:NSButtonTypeSwitch`) under a "Workspace Awareness" section heading. Each is tagged with a new `MENU_TAG_*` constant, has its action set to `CommandTarget::settings_value_selector()` (= `dispatchSettingsValue:`), and its target set to the shared `CommandTarget` — same wiring as the existing scale/movement-speed sliders.
   - A separate "Re-request Accessibility permission" `NSButton` (push button, not a checkbox) tagged with its own constant, with action set to `CommandTarget::command_selector()` (= `dispatchCommand:`). It carries no payload — it just emits an `AppCommand`.
+  - A new `NSTextField` (label, non-editable, multi-line) for the AX permission status hint, placed immediately under the "Avoid text-cursor area" checkbox. Tag: `MENU_TAG_AX_STATUS_LABEL: isize = 1110`. Initially blank. Updated by the existing settings-window sync routine — see `SettingsWindowController` retention/sync below.
+  - `SettingsWindowController` extended (today it holds `show_hide_button`, `focus_mode_button` references at `settings_window_macos.rs:52` and syncs them at `sync_settings`, `:147`):
+    - Add `Retained<NSButton>` fields for `follow_cursor_when_idle_button`, `avoid_text_cursor_button`, `hide_on_fullscreen_button`, `rerequest_accessibility_button` (the last is a push button, retained for enable/disable on visibility-state changes if needed).
+    - Add `Retained<NSTextField>` for `ax_status_label`.
+    - Extend `sync_settings(&self, settings: &AppSettings, ax_trusted: bool)` (signature change — adds `ax_trusted` so the controller can set the label text based on permission state). The sync routine sets each checkbox's `state` from the matching setting, sets the label text to the neutral guidance string when `settings.avoid_text_cursor && !ax_trusted`, otherwise clears it.
+    - The caller (`DesktopPetApp::sync_settings_window`) passes `ax_trusted = self.workspace_observer.is_accessibility_trusted()` (a new cheap accessor on the observer that wraps `AXIsProcessTrusted()`; non-macOS stub returns true to keep the label blank).
 
 - `src/menu_bar.rs` — extended with four new tag constants in the existing 11xx range (settings-control tags, not menu-item tags):
   ```rust
@@ -203,6 +215,7 @@ If any specific AX symbol turns out not to be exposed by `objc2-application-serv
   pub const MENU_TAG_AVOID_TEXT_CURSOR: isize = 1107;
   pub const MENU_TAG_HIDE_ON_FULLSCREEN: isize = 1108;
   pub const MENU_TAG_REREQUEST_ACCESSIBILITY: isize = 1109;
+  pub const MENU_TAG_AX_STATUS_LABEL: isize = 1110;       // NSTextField, hint text only
   ```
   `command_from_tag` gets a new arm for `MENU_TAG_REREQUEST_ACCESSIBILITY` returning `Some(AppCommand::RequestAccessibilityPermission)`. The three checkbox tags do NOT go in `command_from_tag` because they carry state. Instead, a new pure-Rust helper alongside `command_from_tag` is added:
   ```rust
@@ -310,8 +323,9 @@ If `CGWindowListCopyWindowInfo` returns an error (rare, can happen during displa
 ### Unit tests — platform-independent (no macOS runtime required)
 
 `workspace.rs` — platform-independent logic:
-- `WorkspaceSnapshot::is_busy` truth table across (editor frontmost) × (typing rate above/below) × (idle above/below). 8 cases.
+- `WorkspaceSnapshot::is_busy` truth table across (editor frontmost) × (typing rate above/below) × (idle above/below). 8 cases, all with `workspace_available = true`.
 - `is_busy` and `is_idle` are never both true.
+- `workspace_available = false` → `is_busy() == false && is_idle() == false` regardless of all other field values. Verifies the stub-safety gate.
 - Editor-bundle-id matcher: exact match, prefix match for `com.jetbrains.*`, no false positives on substring.
 
 `app.rs::decide_intent` (extracted as a pure function):
@@ -350,7 +364,7 @@ If `CGWindowListCopyWindowInfo` returns an error (rare, can happen during displa
 
 Command dispatch (in `app.rs`):
 - `AppCommand::SetFollowCursorWhenIdle(false)` updates `self.settings.follow_cursor_when_idle` and calls `save_settings()`.
-- `AppCommand::SetAvoidTextCursor(true)` checks AX trust state first via `AXIsProcessTrusted()` (a non-prompting query). If trusted, no further action. If NOT trusted, calls `request_accessibility_now()` — which always invokes `AXIsProcessTrustedWithOptions` with the prompt option. Whether macOS actually displays a dialog is up to macOS: on a fresh state the dialog appears immediately; after a sticky denial macOS will suppress it. When suppression is detected (post-call, `AXIsProcessTrusted()` still returns false and we just asked it to prompt), the app logs a one-shot informational line and surfaces an inline hint next to the toggle in Settings telling the user to either click "Re-request Accessibility permission" or open System Settings → Privacy & Security → Accessibility. The toggle visibly reflects the degraded state rather than appearing enabled silently. The Re-request button remains the canonical escape hatch for the suppressed-dialog case.
+- `AppCommand::SetAvoidTextCursor(true)` checks AX trust state first via `AXIsProcessTrusted()` (a non-prompting query). If trusted, no further action. If NOT trusted, calls `request_accessibility_now()` — which always invokes `AXIsProcessTrustedWithOptions` with the prompt option. We do NOT try to programmatically distinguish "dialog is showing right now" from "macOS suppressed the dialog after sticky denial", because both states return the same `AXIsProcessTrusted() == false` until the user acts. Instead, the inline permission-status label next to the toggle in Settings (described in module layout) is set to a neutral guidance string whenever `avoid_text_cursor` is on AND `AXIsProcessTrusted()` is false — wording like *"Permission needed. If no dialog appears, click Re-request or open System Settings → Privacy & Security → Accessibility."* The label clears once `AXIsProcessTrusted()` returns true on a subsequent poll. This treats the post-call state as "permission not yet granted" rather than asserting suppression, and gives the user the same recovery path regardless of which underlying macOS state they're in.
 - `AppCommand::SetHideOnFullscreen(false)` immediately allows next-tick `set_auto_hidden(false)` even if fullscreen is currently true.
 - `AppCommand::RequestAccessibilityPermission` always calls `request_accessibility_now()` regardless of `prompted_for_accessibility_at_startup`. Fake observer test verifies the call lands every time it is dispatched, even after the startup-once path has already run.
 - `request_accessibility_on_startup_if_enabled(true)` prompts on the first call and is a no-op on subsequent calls (idempotent via the `prompted_at_startup` flag).
@@ -366,11 +380,11 @@ Pure tag → command logic (extracted out of `command_target_macos.rs` for testa
 
 ### Unit tests — macOS-only (require AppKit / Obj-C runtime, gated `#[cfg(target_os = "macos")]`)
 
-`command_target_macos.rs::dispatchSettingsValue:` end-to-end (these need a real Obj-C runtime because `msg_send![sender, state]` is real Obj-C dispatch):
-- Construct an `NSButton` with `setState:NSControlStateValueOn` and the appropriate tag, invoke `dispatchSettingsValue:`, observe that the right `AppCommand` is sent through a fake `EventLoopProxy`.
-- Same with `NSControlStateValueOff`.
+Deliberately empty for the Obj-C bridge. We considered constructing a real `NSButton` and invoking `dispatchSettingsValue:` end-to-end, but `CommandTarget` holds a concrete `EventLoopProxy<AppCommand>` in its ivar (`command_target_macos.rs:39`) with no abstraction seam — there is no way to inject a fake proxy without introducing a trait purely for testability, and using a real `EventLoopProxy` requires a real `EventLoop`, which is heavyweight for a test that would only verify two lines of glue. Coverage instead relies on:
+1. The pure `settings_command_for_button(tag, state_is_on)` helper tested above — this is where any real logic lives.
+2. The manual verification checklist in the smoke section (toggle each checkbox, observe the command takes effect).
 
-These tests live behind `#[cfg(target_os = "macos")]` next to the existing `command_target_macos` test scaffolding. The pure tag → command logic above is the primary coverage; these end-to-end tests only confirm the Obj-C bridge wiring works against a real `NSButton`. If running the harness in CI without a macOS runtime, only the pure tests run; the macOS-only tests are skipped via `cfg`.
+If the Obj-C bridge ever grows past trivial-glue size, this decision should be revisited: extract a `CommandSink` trait, ivar-store the trait object, and add end-to-end tests against a fake.
 
 ### Smoke test (extend `scripts/`)
 
