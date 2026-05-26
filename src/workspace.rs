@@ -37,16 +37,23 @@ impl Default for WorkspaceSnapshot {
     }
 }
 
+/// Keys-per-second rate above which the user is considered to be typing.
+const TYPING_BUSY_THRESHOLD: f32 = 1.0;
+/// Seconds of inactivity below which the user is still considered recently active (busy).
+const BUSY_IDLE_SECS: f32 = 2.0;
+/// Seconds of inactivity at or above which the user is considered idle.
+const IDLE_SECS: f32 = 5.0;
+
 impl WorkspaceSnapshot {
     pub fn is_busy(&self) -> bool {
         self.workspace_available
             && (self.frontmost_is_editor
-                || self.typing_rate_per_sec > 1.0
-                || self.seconds_idle < 2.0)
+                || self.typing_rate_per_sec > TYPING_BUSY_THRESHOLD
+                || self.seconds_idle < BUSY_IDLE_SECS)
     }
 
     pub fn is_idle(&self) -> bool {
-        self.workspace_available && self.seconds_idle >= 5.0 && !self.is_busy()
+        self.workspace_available && self.seconds_idle >= IDLE_SECS && !self.is_busy()
     }
 }
 
@@ -109,6 +116,20 @@ mod tests {
         let s = snapshot_with(false, 0.0, 3.5);
         assert!(!s.is_busy());
         assert!(!s.is_idle());
+    }
+
+    #[test]
+    fn boundary_at_2s_idle_is_neither_busy_nor_idle() {
+        let s = snapshot_with(false, 0.0, 2.0);
+        assert!(!s.is_busy(), "seconds_idle == 2.0 should not be busy (condition is < 2.0)");
+        assert!(!s.is_idle(), "seconds_idle == 2.0 should not be idle (condition is >= 5.0)");
+    }
+
+    #[test]
+    fn boundary_at_5s_idle_is_idle() {
+        let s = snapshot_with(false, 0.0, 5.0);
+        assert!(!s.is_busy());
+        assert!(s.is_idle(), "seconds_idle == 5.0 should be idle (condition is >= 5.0)");
     }
 
     #[test]
