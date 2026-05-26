@@ -55,6 +55,14 @@ pub struct PetTick {
     pub speed_x: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BehaviorIntent {
+    Idle,
+    ChaseHorizontal { direction: Direction },
+    AvoidHorizontal { direction: Direction },
+    AvoidRectHorizontal { direction: Direction },
+}
+
 #[derive(Debug)]
 pub struct Pet {
     state: PetState,
@@ -75,6 +83,7 @@ pub struct Pet {
     hovered: bool,
     dragging: bool,
     hidden: bool,
+    intent: BehaviorIntent,
 }
 
 const FRAME_COUNT: usize = 4;
@@ -121,6 +130,7 @@ impl Pet {
             hovered: false,
             dragging: false,
             hidden: false,
+            intent: BehaviorIntent::Idle,
         }
     }
 
@@ -175,6 +185,21 @@ impl Pet {
     pub fn set_hidden(&mut self, hidden: bool) {
         self.hidden = hidden;
         self.refresh_behavior_mode();
+    }
+
+    pub fn intent(&self) -> BehaviorIntent {
+        self.intent
+    }
+
+    pub fn set_intent(&mut self, intent: BehaviorIntent) {
+        self.intent = intent;
+        if let BehaviorIntent::AvoidRectHorizontal { direction } = intent {
+            self.direction = direction;
+            self.walk_distance_remaining = WALK_DISTANCE;
+            if matches!(self.state, PetState::Idle | PetState::Sleep) {
+                self.enter_walk();
+            }
+        }
     }
 
     pub fn start_micro_action(&mut self, action: MicroAction) {
@@ -289,6 +314,14 @@ impl Pet {
     }
 
     fn enter_walk(&mut self) {
+        match self.intent {
+            BehaviorIntent::ChaseHorizontal { direction }
+            | BehaviorIntent::AvoidHorizontal { direction }
+            | BehaviorIntent::AvoidRectHorizontal { direction } => {
+                self.direction = direction;
+            }
+            BehaviorIntent::Idle => {}
+        }
         self.state = PetState::Walk;
         self.frame_index = 0;
         self.frame_elapsed = Duration::ZERO;
@@ -752,5 +785,48 @@ mod tests {
         assert_eq!(pet.frame_index(), 0);
         pet.tick(Duration::from_millis(1));
         assert_eq!(pet.frame_index(), 1);
+    }
+
+    #[test]
+    fn set_intent_stores_intent() {
+        let mut pet = Pet::new_with_seed(0);
+        pet.set_intent(BehaviorIntent::ChaseHorizontal { direction: Direction::Right });
+        assert_eq!(pet.intent(), BehaviorIntent::ChaseHorizontal { direction: Direction::Right });
+    }
+
+    #[test]
+    fn default_intent_is_idle() {
+        let pet = Pet::new_with_seed(0);
+        assert_eq!(pet.intent(), BehaviorIntent::Idle);
+    }
+
+    #[test]
+    fn set_intent_avoid_rect_interrupts_idle_into_walk() {
+        let mut pet = Pet::new_with_seed(0);
+        // Force pet into Idle state via a complete tick cycle.
+        pet.tick(std::time::Duration::from_millis(0));
+        assert_eq!(pet.state(), PetState::Idle);
+
+        pet.set_intent(BehaviorIntent::AvoidRectHorizontal { direction: Direction::Left });
+
+        assert_eq!(pet.state(), PetState::Walk);
+        assert!(pet.tick(std::time::Duration::ZERO).speed_x < 0.0);
+    }
+
+    #[test]
+    fn set_intent_chase_does_not_interrupt_mid_walk() {
+        let mut pet = Pet::new_with_seed(0);
+        pet.tick(std::time::Duration::from_millis(0));
+        // Drive the pet into a walk segment.
+        while pet.state() != PetState::Walk {
+            pet.tick(std::time::Duration::from_millis(200));
+        }
+        let direction_before = pet.tick(std::time::Duration::ZERO).speed_x.signum();
+
+        pet.set_intent(BehaviorIntent::ChaseHorizontal { direction: Direction::Left });
+
+        // Within the same walk segment, the direction is preserved.
+        let direction_after = pet.tick(std::time::Duration::ZERO).speed_x.signum();
+        assert_eq!(direction_before, direction_after);
     }
 }
