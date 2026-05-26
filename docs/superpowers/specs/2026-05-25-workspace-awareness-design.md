@@ -215,6 +215,8 @@ Plan stage will pin exact versions consistent with `objc2 = "0.6"`. The `objc2-c
     3. `self.auto_hidden && self.pet_visible` → 500 ms (auto-hidden but pet should resume promptly when fullscreen ends).
     4. Existing behavior-mode / state-based intervals (TARGET_FRAME_TIME / IDLE_FRAME_TIME / SLEEP_FRAME_TIME) — unchanged.
 
+  Implementation note: `open_settings_window()` must also reschedule the loop immediately after showing the Settings window, e.g. `self.next_tick_at = Instant::now()` (or an equivalent explicit wake/tick). The current event loop only recomputes `next_tick_interval()` after `tick_due` fires; if the pet was already hidden with a 5 s deadline, merely making Settings visible would otherwise wait on that old deadline before the new 500 ms Settings-visible precedence takes effect. The AX label freshness checks below rely on this immediate reschedule.
+
   The redraw call inside `tick` is gated on `effective_window_visible()` — when hidden either way, no redraw is requested. The Settings-visible check requires a cheap `SettingsWindowController::is_visible(&self) -> bool` accessor (wrap `NSWindow.isVisible`); non-macOS stub returns `false`.
   - Drag termination on auto-hide entry: before `set_auto_hidden(true)` flips the flag, the app inspects `self.interaction.is_dragging()`. If dragging, it calls `let events = self.interaction.mouse_released(last_pointer, MouseButtonKind::Left, /*hit_visible_pixel=*/ false)` (interaction.rs:87-106) and then routes the returned events through `handle_interaction_events` (app.rs:680-685). Going through `mouse_released` is required because that is the only place `InteractionState.dragging` is cleared (interaction.rs:97) — synthesizing an `InteractionEvent::DragEnded` directly would leave the input layer thinking a drag is still active even though the pet handler released its half. The `mouse_released` path also returns the `DragEnded` event we need so `handle_interaction_events` still runs the full drop work (clears pet drag flag, clamps physics, moves window, `persist_current_position()`).
 
@@ -252,7 +254,7 @@ Plan stage will pin exact versions consistent with `objc2 = "0.6"`. The `objc2-c
     - `WorkspaceObserver::is_accessibility_trusted(&self) -> bool` — new cheap accessor wrapping `AXIsProcessTrusted()` (no prompt). Non-macOS stub returns `true` so the label stays blank on those builds.
     - **Trust-state freshness while Settings is open.** The user can grant AX permission in System Settings without closing our Settings window; the label needs to refresh without explicit user action. Each `observer.tick()` (which already runs every ~500 ms) compares `is_accessibility_trusted()` against a cached `last_known_ax_trusted: bool`. On any transition, the observer reports `trust_changed = true` in the returned `WorkspaceTick`, and the app's tick handler calls `self.sync_settings_window()` after consuming the `WorkspaceTick` (the owned-return shape from §workspace.rs makes this borrow-clean). No new polling cadence is introduced — we piggyback on the existing observer poll. The label refreshes within one observer tick (~500 ms) of the user granting/revoking permission in System Settings.
 
-- `src/menu_bar.rs` — extended with four new tag constants in the existing 11xx range (settings-control tags, not menu-item tags):
+- `src/menu_bar.rs` — extended with five new tag constants in the existing 11xx range (settings-control tags, not menu-item tags):
   ```rust
   pub const MENU_TAG_FOLLOW_CURSOR_WHEN_IDLE: isize = 1106;
   pub const MENU_TAG_AVOID_TEXT_CURSOR: isize = 1107;
@@ -338,7 +340,7 @@ The snapshot is owned and dropped per tick — no shared mutable state between m
 **Accessibility permission.** Three entry points cover the realistic UX flows:
 
 1. **Startup with `avoid_text_cursor` already on** (returning user with feature enabled): immediately after `apply_settings(settings)` during window creation (app.rs:162), the app calls `request_accessibility_on_startup_if_enabled(self.settings.avoid_text_cursor)` — passing the setting explicitly because the observer doesn't own `Settings`. The method prompts once and sets `prompted_for_accessibility_at_startup`. Idempotent within a session; no-op when the passed bool is false. Calling earlier (before settings are loaded) would prompt users who have the toggle off in their on-disk settings.
-2. **User toggles `avoid_text_cursor` OFF → ON at runtime**: `SetAvoidTextCursor(true)` first calls `AXIsProcessTrusted()`; if not trusted, calls `request_accessibility_now()` to surface the dialog immediately. The toggle never appears enabled while permission is missing without the user seeing a dialog in the same interaction.
+2. **User toggles `avoid_text_cursor` OFF → ON at runtime**: `SetAvoidTextCursor(true)` first calls `AXIsProcessTrusted()`; if not trusted, calls `request_accessibility_now()` to ask macOS to surface the dialog immediately. The checkbox still remains checked because the persisted setting is the user's intent (`avoid_text_cursor = true`); degraded behavior is communicated by the inline AX status label. The app does not guarantee that a dialog visibly appears in this same interaction because macOS may suppress repeat prompts after sticky denial.
 3. **User explicitly clicks "Re-request Accessibility permission"**: `request_accessibility_now()` always calls `AXIsProcessTrustedWithOptions` with the prompt option, regardless of `prompted_at_startup`. This is the escape hatch when macOS suppresses repeat prompts after a sticky denial — the user must clear the entry in System Settings → Privacy & Security → Accessibility before macOS will show the dialog again.
 
 If denied, `caret_rect` is always `None`, the `AvoidRectHorizontal` arm of the decision tree never fires, and the rest of the features work normally. If the user grants permission later via System Settings without touching any in-app button, the next AX poll picks it up automatically.
@@ -455,7 +457,8 @@ Smoke scenarios:
 
 ### Manual verification checklist (run during implementation)
 
-- Toggle each setting off/on; effect within 1 poll cycle (~500 ms).
+- Toggle each setting off/on; checkbox state persists immediately and the saved setting is reflected when reopening Settings.
+- Workspace-observation effects respect their source cadence: caret AX polls at ~250 ms when trusted; frontmost app and fullscreen checks poll at ~500 ms. Pet movement may apply on the next tick or the next walk-cycle boundary, except the caret-avoid interrupt, which must start moving the pet out of the caret rect within one tick.
 - Grant Accessibility permission, then deny via System Settings → graceful degradation (no crashes, no log spam).
 - YouTube fullscreen in Safari → pet hides; exit → pet returns with last user-visibility.
 - Type rapidly in Notes (non-editor) → pet recognizes busy via typing rate.
