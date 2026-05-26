@@ -86,7 +86,7 @@ pub struct WorkspaceObserver {
     last_snapshot: WorkspaceSnapshot,
     last_tick_at: Option<Instant>,
     last_key_counter: Option<i64>,
-    // Real impl will add: last_frontmost_poll_at, etc.
+    last_frontmost_poll_at: Option<Instant>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -110,6 +110,7 @@ impl WorkspaceObserver {
             last_snapshot: WorkspaceSnapshot::default(),
             last_tick_at: None,
             last_key_counter: None,
+            last_frontmost_poll_at: None,
         }
     }
 
@@ -136,14 +137,31 @@ impl WorkspaceObserver {
         self.last_tick_at = Some(now);
         self.last_key_counter = Some(key_counter);
 
+        let (frontmost_bundle_id, frontmost_is_editor) = {
+            let due = self
+                .last_frontmost_poll_at
+                .map_or(true, |t| now.saturating_duration_since(t) >= std::time::Duration::from_millis(500));
+            if due {
+                let id = macos_polling::frontmost_bundle_id();
+                let is_editor = id.as_deref().map_or(false, is_editor_bundle_id);
+                self.last_frontmost_poll_at = Some(now);
+                (id, is_editor)
+            } else {
+                (
+                    self.last_snapshot.frontmost_bundle_id.clone(),
+                    self.last_snapshot.frontmost_is_editor,
+                )
+            }
+        };
+
         self.last_snapshot = WorkspaceSnapshot {
             workspace_available: cfg!(target_os = "macos"),
             seconds_idle,
             typing_rate_per_sec,
+            frontmost_bundle_id,
+            frontmost_is_editor,
             // The remaining fields stay at their previous values; later tasks
             // populate them.
-            frontmost_bundle_id: self.last_snapshot.frontmost_bundle_id.clone(),
-            frontmost_is_editor: self.last_snapshot.frontmost_is_editor,
             caret_rect: self.last_snapshot.caret_rect,
             fullscreen_active: self.last_snapshot.fullscreen_active,
             cursor_pos: self.last_snapshot.cursor_pos,
@@ -202,6 +220,7 @@ impl Default for WorkspaceObserver {
 
 #[cfg(target_os = "macos")]
 mod macos_polling {
+    use objc2_app_kit::NSWorkspace;
     use objc2_core_graphics::{CGEventSource, CGEventSourceStateID, CGEventType};
 
     /// kCGAnyInputEventType in C is `~0u32` (0xFFFFFFFF). The objc2-core-graphics
@@ -230,12 +249,45 @@ mod macos_polling {
         );
         count as i64
     }
+
+    /// Bundle identifier of the frontmost (key-focused) application, or `None`
+    /// if no app is frontmost or the app has no bundle identifier (rare). The
+    /// underlying `NSWorkspace` call is safe and cheap (~hundreds of ns).
+    pub fn frontmost_bundle_id() -> Option<String> {
+        let workspace = NSWorkspace::sharedWorkspace();
+        let app = workspace.frontmostApplication()?;
+        app.bundleIdentifier().map(|s| s.to_string())
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
 mod macos_polling {
     pub fn seconds_since_last_input() -> f32 { 0.0 }
     pub fn key_down_counter() -> i64 { 0 }
+    pub fn frontmost_bundle_id() -> Option<String> { None }
+}
+
+/// Bundle identifiers we consider "editors" for the purpose of marking the user busy.
+/// Prefix match supported via the trailing `*` convention; matcher handles it.
+const EDITOR_BUNDLE_IDS: &[&str] = &[
+    "com.apple.dt.Xcode",
+    "com.microsoft.VSCode",
+    "com.todesktop.230313mzl4w4u92", // Cursor
+    "com.sublimetext.4",
+    "com.googlecode.iterm2",
+    "com.apple.Terminal",
+    "com.mitchellh.ghostty",
+    "com.jetbrains.*",
+];
+
+pub fn is_editor_bundle_id(bundle_id: &str) -> bool {
+    EDITOR_BUNDLE_IDS.iter().any(|pattern| {
+        if let Some(prefix) = pattern.strip_suffix('*') {
+            bundle_id.starts_with(prefix)
+        } else {
+            *pattern == bundle_id
+        }
+    })
 }
 
 #[cfg(test)]
@@ -372,5 +424,23 @@ mod tests {
         let tick = observer.tick(std::time::Instant::now());
         let _trusted = observer.is_accessibility_trusted();
         let _ = tick;
+    }
+
+    #[test]
+    fn editor_matcher_exact() {
+        assert!(is_editor_bundle_id("com.apple.dt.Xcode"));
+        assert!(is_editor_bundle_id("com.microsoft.VSCode"));
+    }
+
+    #[test]
+    fn editor_matcher_jetbrains_prefix() {
+        assert!(is_editor_bundle_id("com.jetbrains.intellij"));
+        assert!(is_editor_bundle_id("com.jetbrains.RustRover"));
+    }
+
+    #[test]
+    fn editor_matcher_rejects_unrelated_substring() {
+        assert!(!is_editor_bundle_id("com.example.notxcode"));
+        assert!(!is_editor_bundle_id(""));
     }
 }
