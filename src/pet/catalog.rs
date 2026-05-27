@@ -82,12 +82,33 @@ pub struct PetCatalog {
 }
 
 impl PetCatalog {
-    pub fn scan(_bundled: BundledPet, _custom_dir: &Path) -> Self {
-        // Filled in by later tasks. Returning bundled-only is the simplest
-        // shape the next task will assert against.
+    pub fn scan(bundled: BundledPet, custom_dir: &Path) -> Self {
+        let mut entries = Vec::new();
+        let mut load_errors = Vec::new();
+
+        let bundled_entry = CatalogEntry {
+            id: bundled.manifest.id.clone(),
+            display_name: bundled.manifest.display_name.clone(),
+            manifest: bundled.manifest,
+            source: CatalogSource::Bundled,
+            spritesheet_path: bundled.spritesheet_path,
+        };
+        entries.push(bundled_entry);
+
+        if let Err(error) = std::fs::create_dir_all(custom_dir) {
+            load_errors.push(CatalogLoadError::DirRead {
+                path: custom_dir.to_path_buf(),
+                error,
+            });
+            return Self {
+                entries,
+                load_errors,
+            };
+        }
+
         Self {
-            entries: Vec::new(),
-            load_errors: Vec::new(),
+            entries,
+            load_errors,
         }
     }
 
@@ -137,6 +158,7 @@ fn test_bundled_pet() -> BundledPet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn lookup_returns_none_when_empty() {
@@ -145,5 +167,46 @@ mod tests {
             load_errors: Vec::new(),
         };
         assert!(catalog.lookup("anything").is_none());
+    }
+
+    #[test]
+    fn scan_empty_dir_returns_bundled_only() {
+        let dir = tempdir().unwrap();
+        let custom_dir = dir.path().join("pets");
+        // custom_dir does NOT exist yet — scan should create it.
+
+        let catalog = PetCatalog::scan(test_bundled_pet(), &custom_dir);
+
+        assert_eq!(catalog.entries().len(), 1);
+        assert_eq!(catalog.entries()[0].id, "happy-cappy");
+        assert_eq!(catalog.entries()[0].source, CatalogSource::Bundled);
+        assert!(catalog.load_errors().is_empty());
+        assert!(custom_dir.exists(), "scan should create the custom dir");
+    }
+
+    #[test]
+    fn scan_dir_already_exists_returns_bundled_only() {
+        let dir = tempdir().unwrap();
+        // Dir exists but is empty.
+
+        let catalog = PetCatalog::scan(test_bundled_pet(), dir.path());
+
+        assert_eq!(catalog.entries().len(), 1);
+        assert_eq!(catalog.entries()[0].source, CatalogSource::Bundled);
+        assert!(catalog.load_errors().is_empty());
+    }
+
+    #[test]
+    fn scan_lookup_finds_bundled_pet() {
+        let dir = tempdir().unwrap();
+        let catalog = PetCatalog::scan(test_bundled_pet(), dir.path());
+
+        let entry = catalog.lookup("happy-cappy").unwrap();
+        assert_eq!(entry.source, CatalogSource::Bundled);
+        assert_eq!(entry.display_name, "Happy Cappy");
+        assert_eq!(
+            entry.spritesheet_path,
+            PathBuf::from("/bundled/happy_cappy_spritesheet.png")
+        );
     }
 }
