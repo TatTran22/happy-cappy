@@ -443,6 +443,42 @@ mod tests {
     }
 
     #[test]
+    fn scan_ignores_files_at_top_level() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("stray.txt"), b"ignore me").unwrap();
+        std::fs::write(dir.path().join("README.txt"), b"existing readme").unwrap();
+
+        let catalog = PetCatalog::scan(test_bundled_pet(), dir.path());
+
+        assert_eq!(catalog.entries().len(), 1); // bundled only
+        assert!(catalog.load_errors().is_empty());
+    }
+
+    #[test]
+    fn scan_resolves_sprite_path_relative_to_manifest() {
+        let dir = tempdir().unwrap();
+        let pet_dir = dir.path().join("nested");
+        std::fs::create_dir_all(pet_dir.join("art")).unwrap();
+        std::fs::write(
+            pet_dir.join("pet.json"),
+            br#"{
+                "id": "nested",
+                "displayName": "Nested",
+                "spritesheetPath": "art/sprite.png",
+                "frame": {"width": 16, "height": 16, "columns": 4, "rows": 1},
+                "animations": {"idle": {"frames": [0]}}
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(pet_dir.join("art").join("sprite.png"), b"x").unwrap();
+
+        let catalog = PetCatalog::scan(test_bundled_pet(), dir.path());
+
+        let nested = catalog.lookup("nested").unwrap();
+        assert_eq!(nested.spritesheet_path, pet_dir.join("art").join("sprite.png"));
+    }
+
+    #[test]
     fn scan_sorts_custom_pets_by_display_name_case_insensitive() {
         let dir = tempdir().unwrap();
         write_pet(&dir.path().join("a"), "zebra", "Zebra", "z.png");
