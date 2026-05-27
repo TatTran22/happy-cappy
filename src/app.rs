@@ -526,7 +526,34 @@ impl DesktopPetApp {
         let (catalog, _) = build_startup_catalog();
         self.catalog = catalog;
         self.sync_pet_submenu();
+        self.sync_picker_if_visible();
     }
+
+    #[cfg(target_os = "macos")]
+    fn sync_picker_if_visible(&mut self) {
+        use objc2_foundation::MainThreadMarker;
+        let visible = self
+            .picker
+            .as_ref()
+            .map(|p| p.is_visible())
+            .unwrap_or(false);
+        if !visible {
+            return;
+        }
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let base = crate::picker_entries::build_picker_entries_base(&self.catalog);
+        let entries =
+            crate::picker_window_macos::attach_preview_frames(base, &self.catalog, mtm);
+        let active_id = self.active_pet_id.clone();
+        if let Some(picker) = self.picker.as_ref() {
+            picker.sync_entries(entries, &active_id);
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn sync_picker_if_visible(&mut self) {}
 
     #[cfg(not(test))]
     fn ensure_picker_window(
