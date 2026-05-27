@@ -37,6 +37,7 @@ fn default_manifest_version() -> u32 {
 
 #[derive(Debug)]
 pub enum ManifestError {
+    Io(std::io::Error),
     Json(serde_json::Error),
     InvalidVersion(u32),
     EmptyField(&'static str),
@@ -64,6 +65,7 @@ pub enum ManifestError {
 impl fmt::Display for ManifestError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Io(e) => write!(f, "manifest I/O error: {e}"),
             Self::Json(e) => write!(f, "manifest JSON error: {e}"),
             Self::InvalidVersion(v) => write!(f, "invalid manifest_version: {v}"),
             Self::EmptyField(name) => write!(f, "field '{name}' must not be empty"),
@@ -96,6 +98,7 @@ impl fmt::Display for ManifestError {
 impl Error for ManifestError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Io(e) => Some(e),
             Self::Json(e) => Some(e),
             _ => None,
         }
@@ -108,11 +111,28 @@ impl From<serde_json::Error> for ManifestError {
     }
 }
 
+impl From<std::io::Error> for ManifestError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
 impl PetManifest {
     pub fn from_json_str(json: &str) -> Result<Self, ManifestError> {
         let raw: PetManifest = serde_json::from_str(json)?;
         raw.validate()?;
         Ok(raw)
+    }
+
+    pub fn from_path(path: &std::path::Path) -> Result<Self, ManifestError> {
+        let bytes = std::fs::read(path)?;
+        let json = std::str::from_utf8(&bytes).map_err(|_| {
+            ManifestError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "manifest file is not valid UTF-8",
+            ))
+        })?;
+        Self::from_json_str(json)
     }
 
     pub fn load_embedded_happy_cappy() -> Self {
@@ -450,5 +470,47 @@ mod tests {
         }"#;
         let manifest = PetManifest::from_json_str(json).unwrap();
         assert!(manifest.validate_happy_cappy_required_keys().is_ok());
+    }
+
+    #[test]
+    fn from_path_reads_and_parses_file() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pet.json");
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(br#"{
+            "id": "test",
+            "displayName": "Test",
+            "spritesheetPath": "x.png",
+            "frame": {"width": 16, "height": 16, "columns": 4, "rows": 1},
+            "animations": {"idle": {"frames": [0, 1, 2, 3]}}
+        }"#).unwrap();
+        drop(f);
+
+        let manifest = PetManifest::from_path(&path).unwrap();
+        assert_eq!(manifest.id, "test");
+        assert_eq!(manifest.animations["idle"].frames, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn from_path_returns_json_error_for_invalid_file() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pet.json");
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(b"{not valid").unwrap();
+        drop(f);
+
+        let err = PetManifest::from_path(&path).unwrap_err();
+        assert!(matches!(err, ManifestError::Json(_)));
+    }
+
+    #[test]
+    fn from_path_returns_io_error_when_file_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("does-not-exist.json");
+
+        let err = PetManifest::from_path(&path).unwrap_err();
+        assert!(matches!(err, ManifestError::Io(_)));
     }
 }
