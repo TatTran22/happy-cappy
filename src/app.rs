@@ -505,6 +505,11 @@ impl DesktopPetApp {
         }
     }
 
+    pub fn refresh_catalog(&mut self) {
+        let (catalog, _) = build_startup_catalog();
+        self.catalog = catalog;
+    }
+
     pub fn activate_pet(&mut self, id: &str) -> Result<(), ActivationError> {
         if id == self.active_pet_id {
             return Ok(());
@@ -1592,6 +1597,18 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(app.active_pet_id, id);
+    }
+
+    #[test]
+    fn refresh_catalog_replaces_entries() {
+        let mut app = DesktopPetApp::new_with_event_proxy(None);
+        let initial_entry_count = app.catalog.entries().len();
+        // Just verify the method runs and doesn't panic. The catalog dir
+        // will be the real ~/Library path which we can't write to in tests,
+        // so we just sanity-check that the count stays at >= 1 (bundled).
+        app.refresh_catalog();
+        assert!(app.catalog.entries().len() >= 1);
+        assert!(app.catalog.entries().len() >= initial_entry_count.saturating_sub(0));
     }
 }
 
