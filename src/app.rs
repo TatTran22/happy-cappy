@@ -786,7 +786,7 @@ impl DesktopPetApp {
                 self.refresh_catalog();
             }
             AppCommand::ShowPicker => {
-                // TODO: implement ShowPicker command
+                self.show_picker_window();
             }
         }
         true
@@ -802,6 +802,29 @@ impl DesktopPetApp {
                 self.handle_non_quit_command(command);
             }
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn show_picker_window(&mut self) {
+        use objc2_foundation::MainThreadMarker;
+        self.refresh_catalog();
+        let Some(mtm) = MainThreadMarker::new() else {
+            warn!("show_picker_window called off main thread; ignoring");
+            return;
+        };
+        let base = crate::picker_entries::build_picker_entries_base(&self.catalog);
+        let entries =
+            crate::picker_window_macos::attach_preview_frames(base, &self.catalog, mtm);
+        let active_id = self.active_pet_id.clone();
+        if let Some(picker) = self.ensure_picker_window() {
+            picker.sync_entries(entries, &active_id);
+            picker.show();
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn show_picker_window(&mut self) {
+        // No-op on non-macOS — the picker is AppKit-only.
     }
 
     fn set_monitor_behavior(
