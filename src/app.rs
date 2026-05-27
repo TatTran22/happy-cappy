@@ -61,6 +61,31 @@ pub enum AppCommand {
     RevealPetsFolder,
 }
 
+#[derive(Debug)]
+pub enum ActivationError {
+    UnknownId(String),
+    SpriteLoad {
+        id: String,
+        path: PathBuf,
+        error: crate::sprite::SpriteError,
+    },
+}
+
+impl std::fmt::Display for ActivationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownId(id) => write!(f, "unknown pet id: {id}"),
+            Self::SpriteLoad { id, path, error } => write!(
+                f,
+                "failed to load sprite for {id}: {} ({error})",
+                path.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ActivationError {}
+
 fn inner_size_for(frame: (u32, u32), scale: u32) -> LogicalSize<f64> {
     LogicalSize::new((frame.0 * scale) as f64, (frame.1 * scale) as f64)
 }
@@ -478,6 +503,46 @@ impl DesktopPetApp {
                 AppSettings::default()
             }
         }
+    }
+
+    pub fn activate_pet(&mut self, id: &str) -> Result<(), ActivationError> {
+        if id == self.active_pet_id {
+            return Ok(());
+        }
+
+        let entry = self
+            .catalog
+            .lookup(id)
+            .ok_or_else(|| ActivationError::UnknownId(id.to_string()))?
+            .clone();
+
+        let new_sprite = SpriteSheet::load(&entry.spritesheet_path, &entry.manifest.frame)
+            .map_err(|error| ActivationError::SpriteLoad {
+                id: id.to_string(),
+                path: entry.spritesheet_path.clone(),
+                error,
+            })?;
+
+        let new_runtime = PetRuntime::new_with_manifest(entry.manifest.clone());
+        let new_frame_size = new_runtime.frame_size();
+
+        self.pet = new_runtime;
+        self.sprite_sheet = Some(new_sprite);
+        self.active_pet_id = id.to_string();
+        self.settings.active_pet_id = Some(id.to_string());
+
+        if let Some(path) = &self.settings_path {
+            if let Err(error) = self.settings.save_to(path) {
+                warn!("failed to save settings after pet activation: {error}");
+            }
+        }
+
+        if let Some(window) = &self.window {
+            let _ = window.request_inner_size(inner_size_for(new_frame_size, WINDOW_SCALE));
+            window.request_redraw();
+        }
+
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -1505,6 +1570,28 @@ mod tests {
             !app.effective_window_visible(),
             "pet_visible drives the final result"
         );
+    }
+
+    #[test]
+    fn activate_pet_unknown_returns_error_and_keeps_previous() {
+        let mut app = DesktopPetApp::new_with_event_proxy(None);
+        let previous_id = app.active_pet_id.clone();
+
+        let err = app.activate_pet("ghost").unwrap_err();
+
+        assert!(matches!(err, ActivationError::UnknownId(ref id) if id == "ghost"));
+        assert_eq!(app.active_pet_id, previous_id, "previous pet stays active");
+    }
+
+    #[test]
+    fn activate_pet_idempotent_for_same_id() {
+        let mut app = DesktopPetApp::new_with_event_proxy(None);
+        let id = app.active_pet_id.clone();
+
+        let result = app.activate_pet(&id);
+
+        assert!(result.is_ok());
+        assert_eq!(app.active_pet_id, id);
     }
 }
 
