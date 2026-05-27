@@ -259,7 +259,19 @@ impl DesktopPetApp {
         let settings = self.read_settings();
         self.settings.monitor_behavior = settings.monitor_behavior;
         self.update_bounds_from_window(event_loop);
+        let desired_pet_id = settings.active_pet_id.clone();
         self.apply_settings(settings);
+        if let Some(id) = desired_pet_id {
+            if id != self.active_pet_id {
+                if let Err(error) = self.activate_pet(&id) {
+                    warn!("startup: failed to activate persisted pet {id:?}: {error}");
+                    self.settings.active_pet_id = None;
+                    if let Some(path) = &self.settings_path {
+                        let _ = self.settings.save_to(path);
+                    }
+                }
+            }
+        }
         self.workspace_observer
             .request_accessibility_on_startup_if_enabled(self.settings.avoid_text_cursor);
         if !self.pet_visible {
