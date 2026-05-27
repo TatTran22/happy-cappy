@@ -32,13 +32,23 @@ impl PickerWindowController {
 
 #[cfg(target_os = "macos")]
 mod macos {
+    use std::cell::RefCell;
+
     use winit::event_loop::EventLoopProxy;
 
     use crate::app::AppCommand;
     use crate::sprite::SpriteSheet;
 
+    use objc2::define_class;
+    use objc2::msg_send;
     use objc2::rc::Retained;
+    use objc2::runtime::{AnyObject, NSObjectProtocol};
+    use objc2::{sel, DefinedClass, MainThreadOnly};
     use objc2::AnyThread;
+    use objc2_app_kit::{
+        NSButton, NSControlTextEditingDelegate, NSImageView, NSTableView, NSTableViewDataSource,
+        NSTableViewDelegate, NSTextField, NSView,
+    };
     use objc2_app_kit::NSImage;
     use objc2_core_foundation::CFRetained;
     use objc2_core_graphics::{
@@ -46,7 +56,7 @@ mod macos {
         CGImageAlphaInfo, CGImageByteOrderInfo,
     };
     use objc2_core_foundation::CGSize;
-    use objc2_foundation::MainThreadMarker;
+    use objc2_foundation::{MainThreadMarker, NSInteger, NSObject, NSString};
 
     /// Placeholder — the real implementation arrives in subsequent tasks.
     pub struct PickerWindowController;
@@ -63,6 +73,203 @@ mod macos {
         }
 
         pub fn sync_entries(&self, _entries: Vec<PickerEntryBase>, _active_id: &str) {}
+    }
+
+    #[allow(dead_code)]
+    pub(super) struct PickerTableSourceIvars {
+        pub proxy: EventLoopProxy<AppCommand>,
+        pub entries: RefCell<Vec<PickerEntry>>,
+        pub active_id: RefCell<String>,
+        pub selected_index: RefCell<Option<usize>>,
+        pub frame_counter: RefCell<usize>,
+        pub table_view: RefCell<Option<Retained<NSTableView>>>,
+        pub detail_image: RefCell<Option<Retained<NSImageView>>>,
+        pub detail_name: RefCell<Option<Retained<NSTextField>>>,
+        pub detail_id: RefCell<Option<Retained<NSTextField>>>,
+        pub detail_source: RefCell<Option<Retained<NSTextField>>>,
+        pub detail_anim: RefCell<Option<Retained<NSTextField>>>,
+        pub detail_error: RefCell<Option<Retained<NSTextField>>>,
+        pub apply_button: RefCell<Option<Retained<NSButton>>>,
+        pub reveal_button: RefCell<Option<Retained<NSButton>>>,
+    }
+
+    define_class!(
+        #[unsafe(super(NSObject))]
+        #[name = "HappyCappyPickerTableSource"]
+        #[thread_kind = MainThreadOnly]
+        #[ivars = PickerTableSourceIvars]
+        pub(super) struct PickerTableSource;
+
+        unsafe impl NSObjectProtocol for PickerTableSource {}
+
+        unsafe impl NSTableViewDataSource for PickerTableSource {
+            #[unsafe(method(numberOfRowsInTableView:))]
+            fn number_of_rows(&self, _table_view: &NSTableView) -> NSInteger {
+                self.ivars().entries.borrow().len() as NSInteger
+            }
+        }
+
+        unsafe impl NSControlTextEditingDelegate for PickerTableSource {}
+
+        unsafe impl NSTableViewDelegate for PickerTableSource {
+            #[unsafe(method_id(tableView:viewForTableColumn:row:))]
+            fn view_for_row(
+                &self,
+                _table_view: &NSTableView,
+                _column: Option<&AnyObject>,
+                row: NSInteger,
+            ) -> Option<Retained<NSView>> {
+                make_row_view_for_index(&self.ivars().entries.borrow(), row as usize)
+            }
+
+            #[unsafe(method(tableViewSelectionDidChange:))]
+            fn selection_changed(&self, _notification: &AnyObject) {
+                let table = match self.ivars().table_view.borrow().clone() {
+                    Some(t) => t,
+                    None => return,
+                };
+                let selected: NSInteger = unsafe { msg_send![&*table, selectedRow] };
+                *self.ivars().selected_index.borrow_mut() = if selected < 0 {
+                    None
+                } else {
+                    Some(selected as usize)
+                };
+                self.refresh_detail_pane();
+            }
+        }
+
+        impl PickerTableSource {
+            #[unsafe(method(tickPreviewAnimation:))]
+            fn tick_preview_animation(&self, _timer: &AnyObject) {
+                let next = self.ivars().frame_counter.borrow().wrapping_add(1);
+                *self.ivars().frame_counter.borrow_mut() = next;
+                self.refresh_visible_row_images();
+                self.refresh_detail_image();
+            }
+
+            #[unsafe(method(onApplyClicked:))]
+            fn on_apply_clicked(&self, _sender: &AnyObject) {
+                let entries = self.ivars().entries.borrow();
+                let Some(idx) = *self.ivars().selected_index.borrow() else {
+                    return;
+                };
+                let Some(entry) = entries.get(idx) else {
+                    return;
+                };
+                if entry.base.error.is_some() {
+                    return;
+                }
+                if entry.base.id == *self.ivars().active_id.borrow() {
+                    return;
+                }
+                let _ = self
+                    .ivars()
+                    .proxy
+                    .send_event(AppCommand::ActivatePet(entry.base.id.clone()));
+            }
+
+            #[unsafe(method(onRevealClicked:))]
+            fn on_reveal_clicked(&self, _sender: &AnyObject) {
+                let _ = self
+                    .ivars()
+                    .proxy
+                    .send_event(AppCommand::RevealPetsFolder);
+            }
+        }
+    );
+
+    impl PickerTableSource {
+        #[allow(dead_code)]
+        pub(super) fn new(
+            mtm: MainThreadMarker,
+            proxy: EventLoopProxy<AppCommand>,
+        ) -> Retained<Self> {
+            let ivars = PickerTableSourceIvars {
+                proxy,
+                entries: RefCell::new(Vec::new()),
+                active_id: RefCell::new(String::new()),
+                selected_index: RefCell::new(None),
+                frame_counter: RefCell::new(0),
+                table_view: RefCell::new(None),
+                detail_image: RefCell::new(None),
+                detail_name: RefCell::new(None),
+                detail_id: RefCell::new(None),
+                detail_source: RefCell::new(None),
+                detail_anim: RefCell::new(None),
+                detail_error: RefCell::new(None),
+                apply_button: RefCell::new(None),
+                reveal_button: RefCell::new(None),
+            };
+            let this = mtm.alloc().set_ivars(ivars);
+            unsafe { msg_send![super(this), init] }
+        }
+
+        #[allow(dead_code)]
+        pub(super) fn tick_selector() -> objc2::runtime::Sel {
+            sel!(tickPreviewAnimation:)
+        }
+
+        #[allow(dead_code)]
+        pub(super) fn apply_selector() -> objc2::runtime::Sel {
+            sel!(onApplyClicked:)
+        }
+
+        #[allow(dead_code)]
+        pub(super) fn reveal_selector() -> objc2::runtime::Sel {
+            sel!(onRevealClicked:)
+        }
+
+        #[allow(dead_code)]
+        pub(super) fn refresh_detail_pane(&self) {
+            // Stub — populated in Task 16.
+        }
+
+        #[allow(dead_code)]
+        pub(super) fn refresh_detail_image(&self) {
+            // Stub — populated in Task 16.
+        }
+
+        #[allow(dead_code)]
+        pub(super) fn refresh_visible_row_images(&self) {
+            // Stub — populated in Task 16.
+        }
+    }
+
+    fn make_row_view_for_index(
+        entries: &[PickerEntry],
+        idx: usize,
+    ) -> Option<Retained<NSView>> {
+        let entry = entries.get(idx)?;
+        let mtm = MainThreadMarker::new()?;
+        Some(make_row_view(entry, mtm))
+    }
+
+    fn make_row_view(entry: &PickerEntry, mtm: MainThreadMarker) -> Retained<NSView> {
+        use objc2_foundation::{NSPoint, NSRect, NSSize};
+        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(200.0, 44.0));
+        let row = NSView::initWithFrame(NSView::alloc(mtm), frame);
+        // Thumbnail (left)
+        let thumb = NSImageView::initWithFrame(
+            NSImageView::alloc(mtm),
+            NSRect::new(NSPoint::new(8.0, 6.0), NSSize::new(32.0, 32.0)),
+        );
+        if let Some(image) = entry.frames.first() {
+            thumb.setImage(Some(image));
+        }
+        row.addSubview(&thumb);
+        // Title label (right of thumbnail)
+        let title_text = if entry.base.error.is_some() {
+            format!("\u{26a0} {}", entry.base.display_name)
+        } else {
+            entry.base.display_name.clone()
+        };
+        let title_field = NSTextField::labelWithString(&NSString::from_str(&title_text), mtm);
+        title_field.setFrame(NSRect::new(
+            NSPoint::new(48.0, 12.0),
+            NSSize::new(140.0, 20.0),
+        ));
+        row.addSubview(&title_field);
+        row
     }
 
     /// Copy the pixel rectangle for frame `index` out of `sheet.image()` into a
