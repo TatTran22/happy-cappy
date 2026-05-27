@@ -19,6 +19,7 @@ mod macos {
         runtime::{AnyObject, Sel},
         sel, DefinedClass, MainThreadOnly,
     };
+    use objc2_app_kit::NSMenuDelegate;
     use objc2_foundation::{MainThreadMarker, NSInteger, NSObject, NSObjectProtocol};
     use winit::event_loop::EventLoopProxy;
 
@@ -40,6 +41,8 @@ mod macos {
         pub struct CommandTarget;
 
         unsafe impl NSObjectProtocol for CommandTarget {}
+
+        unsafe impl NSMenuDelegate for CommandTarget {}
 
         impl CommandTarget {
             #[unsafe(method(dispatchCommand:))]
@@ -73,6 +76,11 @@ mod macos {
                     .to_string_lossy()
                     .into_owned();
                 self.send_command(AppCommand::ActivatePet(id));
+            }
+
+            #[unsafe(method(menuNeedsUpdate:))]
+            fn menu_needs_update(&self, _menu: &objc2_app_kit::NSMenu) {
+                self.send_command(AppCommand::RefreshPetMenu);
             }
 
             #[unsafe(method(dispatchSettingsValue:))]

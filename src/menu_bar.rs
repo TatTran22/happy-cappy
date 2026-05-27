@@ -21,6 +21,7 @@ pub const MENU_TAG_REREQUEST_ACCESSIBILITY: isize = 1109;
 pub const MENU_TAG_AX_STATUS_LABEL: isize = 1110;
 pub const MENU_TAG_PET_SUBMENU: isize = 1200;
 pub const MENU_TAG_REVEAL_PETS_FOLDER: isize = 1201;
+pub const MENU_TAG_REFRESH_PET_MENU: isize = 1202;
 // Pet menu items use tag range MENU_TAG_PET_ITEM_BASE..(MENU_TAG_PET_ITEM_BASE + N).
 // The id is carried as the representedObject (string) on the NSMenuItem.
 pub const MENU_TAG_PET_ITEM_BASE: isize = 1300;
@@ -36,6 +37,7 @@ pub fn command_from_tag(tag: isize) -> Option<AppCommand> {
         MENU_TAG_CHEER_UP => Some(AppCommand::CheerUp),
         MENU_TAG_REREQUEST_ACCESSIBILITY => Some(AppCommand::RequestAccessibilityPermission),
         MENU_TAG_REVEAL_PETS_FOLDER => Some(AppCommand::RevealPetsFolder),
+        MENU_TAG_REFRESH_PET_MENU => Some(AppCommand::RefreshPetMenu),
         _ => None,
     }
 }
@@ -94,6 +96,14 @@ impl MenuBarController {
         let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), ns_string!("Happy Cappy"));
 
         let pet_submenu = NSMenu::initWithTitle(NSMenu::alloc(mtm), ns_string!("Pet"));
+
+        let target = crate::command_target_macos::CommandTarget::new(mtm, proxy);
+        {
+            use objc2::runtime::ProtocolObject;
+            let delegate_obj = ProtocolObject::from_ref(&*target);
+            pet_submenu.setDelegate(Some(delegate_obj));
+        }
+
         let pet_root_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 NSMenuItem::alloc(mtm),
@@ -170,7 +180,6 @@ impl MenuBarController {
         reset_item.setTag(MENU_TAG_RESET);
         quit_item.setTag(MENU_TAG_QUIT);
 
-        let target = crate::command_target_macos::CommandTarget::new(mtm, proxy);
         let target_object: &AnyObject = target.as_ref();
         for item in [
             &settings_item,

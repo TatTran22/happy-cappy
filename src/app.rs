@@ -59,6 +59,7 @@ pub enum AppCommand {
     Quit,
     ActivatePet(String),
     RevealPetsFolder,
+    RefreshPetMenu,
 }
 
 #[derive(Debug)]
@@ -727,6 +728,9 @@ impl DesktopPetApp {
                     let _ = std::fs::create_dir_all(&dir);
                     reveal_in_finder(&dir);
                 }
+            }
+            AppCommand::RefreshPetMenu => {
+                self.refresh_catalog();
             }
         }
         true
