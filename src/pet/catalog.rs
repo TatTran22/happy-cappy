@@ -106,6 +106,33 @@ impl PetCatalog {
             };
         }
 
+        let read_dir = match std::fs::read_dir(custom_dir) {
+            Ok(rd) => rd,
+            Err(error) => {
+                load_errors.push(CatalogLoadError::DirRead {
+                    path: custom_dir.to_path_buf(),
+                    error,
+                });
+                return Self {
+                    entries,
+                    load_errors,
+                };
+            }
+        };
+
+        for entry in read_dir {
+            let Ok(entry) = entry else { continue };
+            let Ok(file_type) = entry.file_type() else { continue };
+            if !file_type.is_dir() {
+                continue;
+            }
+            match load_custom_pet(&entry.path()) {
+                Ok(Some(catalog_entry)) => entries.push(catalog_entry),
+                Ok(None) => {}
+                Err(err) => load_errors.push(err),
+            }
+        }
+
         Self {
             entries,
             load_errors,
@@ -123,6 +150,36 @@ impl PetCatalog {
     pub fn load_errors(&self) -> &[CatalogLoadError] {
         &self.load_errors
     }
+}
+
+fn load_custom_pet(dir: &Path) -> Result<Option<CatalogEntry>, CatalogLoadError> {
+    let manifest_path = dir.join("pet.json");
+    if !manifest_path.exists() {
+        return Ok(None);
+    }
+
+    let manifest = PetManifest::from_path(&manifest_path).map_err(|error| {
+        CatalogLoadError::ManifestParse {
+            path: manifest_path.clone(),
+            error,
+        }
+    })?;
+
+    let sprite_path = dir.join(&manifest.spritesheet_path);
+    if !sprite_path.exists() {
+        return Err(CatalogLoadError::SpritesheetMissing {
+            manifest_path,
+            sprite_path,
+        });
+    }
+
+    Ok(Some(CatalogEntry {
+        id: manifest.id.clone(),
+        display_name: manifest.display_name.clone(),
+        manifest,
+        source: CatalogSource::Custom,
+        spritesheet_path: sprite_path,
+    }))
 }
 
 #[cfg(test)]
@@ -207,6 +264,40 @@ mod tests {
         assert_eq!(
             entry.spritesheet_path,
             PathBuf::from("/bundled/happy_cappy_spritesheet.png")
+        );
+    }
+
+    fn write_pet(dir: &Path, id: &str, display_name: &str, sprite_name: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        let manifest = format!(
+            r#"{{
+                "id": "{id}",
+                "displayName": "{display_name}",
+                "spritesheetPath": "{sprite_name}",
+                "frame": {{"width": 16, "height": 16, "columns": 4, "rows": 1}},
+                "animations": {{"idle": {{"frames": [0, 1, 2, 3]}}}}
+            }}"#
+        );
+        std::fs::write(dir.join("pet.json"), manifest).unwrap();
+        std::fs::write(dir.join(sprite_name), b"fake-png-bytes").unwrap();
+    }
+
+    #[test]
+    fn scan_picks_up_one_valid_custom_pet() {
+        let dir = tempdir().unwrap();
+        write_pet(&dir.path().join("shiba"), "shiba", "Shiba", "sprite.png");
+
+        let catalog = PetCatalog::scan(test_bundled_pet(), dir.path());
+
+        assert_eq!(catalog.entries().len(), 2);
+        assert!(catalog.load_errors().is_empty());
+
+        let shiba = catalog.lookup("shiba").unwrap();
+        assert_eq!(shiba.source, CatalogSource::Custom);
+        assert_eq!(shiba.display_name, "Shiba");
+        assert_eq!(
+            shiba.spritesheet_path,
+            dir.path().join("shiba").join("sprite.png")
         );
     }
 }
