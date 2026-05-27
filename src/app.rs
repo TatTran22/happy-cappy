@@ -60,6 +60,7 @@ pub enum AppCommand {
     ActivatePet(String),
     RevealPetsFolder,
     RefreshPetMenu,
+    ShowPicker,
 }
 
 #[derive(Debug)]
@@ -757,6 +758,9 @@ impl DesktopPetApp {
             }
             AppCommand::RefreshPetMenu => {
                 self.refresh_catalog();
+            }
+            AppCommand::ShowPicker => {
+                // TODO: implement ShowPicker command
             }
         }
         true
