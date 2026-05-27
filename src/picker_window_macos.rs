@@ -5,6 +5,7 @@
 //! dispatching user actions back through [`crate::app::AppCommand`] via
 //! [`crate::command_target_macos::CommandTarget`].
 
+#[cfg(not(target_os = "macos"))]
 use crate::picker_entries::PickerEntryBase;
 
 #[cfg(not(target_os = "macos"))]
@@ -31,7 +32,6 @@ impl PickerWindowController {
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use super::*;
     use winit::event_loop::EventLoopProxy;
 
     use crate::app::AppCommand;
@@ -68,7 +68,6 @@ mod macos {
     /// Copy the pixel rectangle for frame `index` out of `sheet.image()` into a
     /// freshly-allocated packed RGBA buffer. Width and height match the frame
     /// geometry; row stride is `width * 4`.
-    #[allow(dead_code)]
     pub(super) fn crop_frame_rgba(sheet: &SpriteSheet, index: usize) -> Vec<u8> {
         let rect = sheet.frame_rect(index as u32);
         let image = sheet.image();
@@ -87,7 +86,6 @@ mod macos {
     /// `rgba` must have exactly `width * height * 4` bytes (row stride is
     /// `width * 4`). The buffer is borrowed only for the duration of this
     /// call; Core Graphics copies the pixel data before the function returns.
-    #[allow(dead_code)]
     pub(super) fn rgba_to_nsimage(
         rgba: &[u8],
         width: u32,
@@ -146,10 +144,107 @@ mod macos {
         // NSImage is AnyThread, so alloc() does not require mtm.
         NSImage::initWithCGImage_size(NSImage::alloc(), &cg_image, size)
     }
+
+    use crate::pet::catalog::{CatalogEntry, PetCatalog};
+    use crate::picker_entries::PickerEntryBase;
+    use crate::sprite::SpriteError;
+
+    #[derive(Debug)]
+    pub enum PreviewBuildError {
+        Sprite(SpriteError),
+        NoAnimation,
+    }
+
+    impl From<SpriteError> for PreviewBuildError {
+        fn from(error: SpriteError) -> Self {
+            Self::Sprite(error)
+        }
+    }
+
+    impl std::fmt::Display for PreviewBuildError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::Sprite(err) => write!(f, "sprite decode failed: {err}"),
+                Self::NoAnimation => write!(f, "no animations defined in manifest"),
+            }
+        }
+    }
+
+    /// Decode the idle animation's frames for one catalog entry into a list of
+    /// `NSImage`. Falls back to the first defined animation if `idle` is
+    /// missing (this matches the picker's display intent — show *some* motion).
+    #[allow(dead_code)]
+    pub(super) fn build_preview_frames(
+        entry: &CatalogEntry,
+        mtm: MainThreadMarker,
+    ) -> Result<Vec<Retained<NSImage>>, PreviewBuildError> {
+        let sheet = SpriteSheet::load(&entry.spritesheet_path, &entry.manifest.frame)?;
+        let animation = entry
+            .manifest
+            .animations
+            .get("idle")
+            .or_else(|| entry.manifest.animations.values().next())
+            .ok_or(PreviewBuildError::NoAnimation)?;
+        let geometry = sheet.geometry();
+        let mut frames = Vec::with_capacity(animation.frames.len());
+        for &index in &animation.frames {
+            let rgba = crop_frame_rgba(&sheet, index as usize);
+            let image = rgba_to_nsimage(&rgba, geometry.width, geometry.height, mtm);
+            frames.push(image);
+        }
+        Ok(frames)
+    }
+
+    /// Full AppKit-side picker entry: pure base data + decoded NSImage frames.
+    #[derive(Clone)]
+    pub struct PickerEntry {
+        pub base: PickerEntryBase,
+        pub frames: Vec<Retained<NSImage>>,
+    }
+
+    /// Walk `entries`, decode preview frames for OK rows, and surface decode
+    /// failures as additional errors on the row (frames stays empty).
+    pub fn attach_preview_frames(
+        entries: Vec<PickerEntryBase>,
+        catalog: &PetCatalog,
+        mtm: MainThreadMarker,
+    ) -> Vec<PickerEntry> {
+        entries
+            .into_iter()
+            .map(|mut base| {
+                if base.error.is_some() {
+                    return PickerEntry {
+                        base,
+                        frames: Vec::new(),
+                    };
+                }
+                let Some(catalog_entry) = catalog.lookup(&base.id) else {
+                    base.error = Some("Catalog entry missing for picker row".to_string());
+                    return PickerEntry {
+                        base,
+                        frames: Vec::new(),
+                    };
+                };
+                match build_preview_frames(catalog_entry, mtm) {
+                    Ok(frames) => PickerEntry { base, frames },
+                    Err(err) => {
+                        base.error = Some(format!("Couldn't decode preview: {err}"));
+                        PickerEntry {
+                            base,
+                            frames: Vec::new(),
+                        }
+                    }
+                }
+            })
+            .collect()
+    }
 }
 
 #[cfg(target_os = "macos")]
 pub use macos::PickerWindowController;
+
+#[cfg(target_os = "macos")]
+pub use macos::{attach_preview_frames, PickerEntry, PreviewBuildError};
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
