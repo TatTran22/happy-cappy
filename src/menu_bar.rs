@@ -19,6 +19,11 @@ pub const MENU_TAG_AVOID_TEXT_CURSOR: isize = 1107;
 pub const MENU_TAG_HIDE_ON_FULLSCREEN: isize = 1108;
 pub const MENU_TAG_REREQUEST_ACCESSIBILITY: isize = 1109;
 pub const MENU_TAG_AX_STATUS_LABEL: isize = 1110;
+pub const MENU_TAG_PET_SUBMENU: isize = 1200;
+pub const MENU_TAG_REVEAL_PETS_FOLDER: isize = 1201;
+// Pet menu items use tag range MENU_TAG_PET_ITEM_BASE..(MENU_TAG_PET_ITEM_BASE + N).
+// The id is carried as the representedObject (string) on the NSMenuItem.
+pub const MENU_TAG_PET_ITEM_BASE: isize = 1300;
 
 pub fn command_from_tag(tag: isize) -> Option<AppCommand> {
     match tag {
@@ -30,6 +35,7 @@ pub fn command_from_tag(tag: isize) -> Option<AppCommand> {
         MENU_TAG_NAP => Some(AppCommand::Nap),
         MENU_TAG_CHEER_UP => Some(AppCommand::CheerUp),
         MENU_TAG_REREQUEST_ACCESSIBILITY => Some(AppCommand::RequestAccessibilityPermission),
+        MENU_TAG_REVEAL_PETS_FOLDER => Some(AppCommand::RevealPetsFolder),
         _ => None,
     }
 }
@@ -304,5 +310,47 @@ mod tests {
             command_from_tag(MENU_TAG_REREQUEST_ACCESSIBILITY),
             Some(AppCommand::RequestAccessibilityPermission)
         );
+    }
+
+    #[test]
+    fn command_from_tag_maps_reveal_pets_folder() {
+        assert_eq!(
+            command_from_tag(MENU_TAG_REVEAL_PETS_FOLDER),
+            Some(AppCommand::RevealPetsFolder)
+        );
+    }
+
+    #[test]
+    fn pet_item_base_does_not_collide_with_other_tags() {
+        // Sanity check — ensure the new constants don't share values with the
+        // pre-existing ones.
+        let used = [
+            MENU_TAG_SETTINGS,
+            MENU_TAG_SHOW_HIDE,
+            MENU_TAG_RESET,
+            MENU_TAG_QUIT,
+            MENU_TAG_FOCUS_MODE,
+            MENU_TAG_NAP,
+            MENU_TAG_CHEER_UP,
+            MENU_TAG_PERSONALITY,
+            MENU_TAG_SCALE,
+            MENU_TAG_MOVEMENT_SPEED,
+            MENU_TAG_HOVER_INTENSITY,
+            MENU_TAG_MONITOR_BEHAVIOR,
+            MENU_TAG_FOLLOW_CURSOR_WHEN_IDLE,
+            MENU_TAG_AVOID_TEXT_CURSOR,
+            MENU_TAG_HIDE_ON_FULLSCREEN,
+            MENU_TAG_REREQUEST_ACCESSIBILITY,
+            MENU_TAG_AX_STATUS_LABEL,
+            MENU_TAG_REVEAL_PETS_FOLDER,
+            MENU_TAG_PET_SUBMENU,
+        ];
+        for (i, a) in used.iter().enumerate() {
+            for b in &used[i + 1..] {
+                assert_ne!(a, b, "menu tag collision between {a} and {b}");
+            }
+        }
+        // Pet item base must be safely above all single tags.
+        assert!(MENU_TAG_PET_ITEM_BASE > *used.iter().max().unwrap());
     }
 }
