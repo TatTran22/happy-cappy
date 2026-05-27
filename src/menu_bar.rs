@@ -59,6 +59,13 @@ impl MenuBarController {
     }
 
     pub fn sync_runtime_state(&self, _pet_visible: bool, _focus_mode: bool) {}
+
+    pub fn populate_pet_submenu(
+        &self,
+        _entries: &[(String, String)],
+        _active_id: &str,
+    ) {
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -67,7 +74,8 @@ pub struct MenuBarController {
     _menu: objc2::rc::Retained<objc2_app_kit::NSMenu>,
     show_hide_item: objc2::rc::Retained<objc2_app_kit::NSMenuItem>,
     focus_mode_item: objc2::rc::Retained<objc2_app_kit::NSMenuItem>,
-    _target: objc2::rc::Retained<crate::command_target_macos::CommandTarget>,
+    pet_submenu: objc2::rc::Retained<objc2_app_kit::NSMenu>,
+    target: objc2::rc::Retained<crate::command_target_macos::CommandTarget>,
 }
 
 #[cfg(target_os = "macos")]
@@ -84,6 +92,19 @@ impl MenuBarController {
         status_item.setTitle(Some(ns_string!("HC")));
 
         let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), ns_string!("Happy Cappy"));
+
+        let pet_submenu = NSMenu::initWithTitle(NSMenu::alloc(mtm), ns_string!("Pet"));
+        let pet_root_item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                ns_string!("Pet"),
+                None,
+                ns_string!(""),
+            )
+        };
+        pet_root_item.setTag(MENU_TAG_PET_SUBMENU);
+        pet_root_item.setSubmenu(Some(&pet_submenu));
+
         let settings_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 NSMenuItem::alloc(mtm),
@@ -168,6 +189,10 @@ impl MenuBarController {
             }
         }
 
+        menu.addItem(&pet_root_item);
+        unsafe {
+            menu.addItem(&NSMenuItem::separatorItem());
+        }
         menu.addItem(&settings_item);
         menu.addItem(&show_hide_item);
         menu.addItem(&focus_mode_item);
@@ -182,7 +207,8 @@ impl MenuBarController {
             _menu: menu,
             show_hide_item,
             focus_mode_item,
-            _target: target,
+            pet_submenu,
+            target,
         })
     }
 
@@ -191,6 +217,76 @@ impl MenuBarController {
             .setTitle(show_hide_ns_title(pet_visible));
         self.focus_mode_item
             .setTitle(focus_mode_ns_title(focus_mode));
+    }
+
+    pub fn populate_pet_submenu(
+        &self,
+        entries: &[(String, String)], // (id, display_name)
+        active_id: &str,
+    ) {
+        use objc2::{rc::Retained, runtime::AnyObject, MainThreadOnly};
+        use objc2_app_kit::{NSControlStateValueOff, NSControlStateValueOn, NSMenuItem};
+        use objc2_foundation::{ns_string, MainThreadMarker, NSString};
+
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+
+        unsafe {
+            while self.pet_submenu.numberOfItems() > 0 {
+                self.pet_submenu.removeItemAtIndex(0);
+            }
+        }
+
+        for (i, (id, display_name)) in entries.iter().enumerate() {
+            let title = NSString::from_str(display_name);
+            let item: Retained<NSMenuItem> = unsafe {
+                NSMenuItem::initWithTitle_action_keyEquivalent(
+                    NSMenuItem::alloc(mtm),
+                    &title,
+                    None,
+                    ns_string!(""),
+                )
+            };
+            item.setTag(MENU_TAG_PET_ITEM_BASE + i as isize);
+            unsafe {
+                let id_ns = NSString::from_str(id);
+                let id_obj: &AnyObject = &*id_ns;
+                let id_retained: Retained<AnyObject> = Retained::from(id_obj);
+                let _: () = objc2::msg_send![&*item, setRepresentedObject: &*id_retained];
+                item.setTarget(Some(self.target.as_ref()));
+                item.setAction(Some(
+                    crate::command_target_macos::CommandTarget::activate_pet_selector(),
+                ));
+                item.setState(if id == active_id {
+                    NSControlStateValueOn
+                } else {
+                    NSControlStateValueOff
+                });
+            }
+            self.pet_submenu.addItem(&item);
+        }
+
+        unsafe {
+            self.pet_submenu
+                .addItem(&objc2_app_kit::NSMenuItem::separatorItem());
+        }
+        let reveal_item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                ns_string!("Reveal Pets Folder"),
+                None,
+                ns_string!(""),
+            )
+        };
+        reveal_item.setTag(MENU_TAG_REVEAL_PETS_FOLDER);
+        unsafe {
+            reveal_item.setTarget(Some(self.target.as_ref()));
+            reveal_item.setAction(Some(
+                crate::command_target_macos::CommandTarget::command_selector(),
+            ));
+        }
+        self.pet_submenu.addItem(&reveal_item);
     }
 }
 
