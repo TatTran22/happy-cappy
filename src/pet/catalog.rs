@@ -443,6 +443,19 @@ mod tests {
     }
 
     #[test]
+    fn scan_sorts_custom_pets_by_display_name_case_insensitive() {
+        let dir = tempdir().unwrap();
+        write_pet(&dir.path().join("a"), "zebra", "Zebra", "z.png");
+        write_pet(&dir.path().join("b"), "alpha", "alpha", "a.png");
+        write_pet(&dir.path().join("c"), "beta", "Beta", "b.png");
+
+        let catalog = PetCatalog::scan(test_bundled_pet(), dir.path());
+
+        let order: Vec<&str> = catalog.entries().iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(order, vec!["happy-cappy", "alpha", "beta", "zebra"]);
+    }
+
+    #[test]
     fn scan_picks_up_one_valid_custom_pet() {
         let dir = tempdir().unwrap();
         write_pet(&dir.path().join("shiba"), "shiba", "Shiba", "sprite.png");
