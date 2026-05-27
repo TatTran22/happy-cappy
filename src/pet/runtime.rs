@@ -89,38 +89,11 @@ impl Default for PetRuntime {
 
 impl PetRuntime {
     pub fn new() -> Self {
-        Self::new_with_seed(0)
+        Self::new_with_manifest(PetManifest::load_embedded_happy_cappy())
     }
 
     pub fn new_with_seed(seed: u64) -> Self {
-        let direction = if seed % 2 == 0 {
-            Direction::Right
-        } else {
-            Direction::Left
-        };
-
-        Self {
-            state: PetState::Idle,
-            direction,
-            frame_index: 0,
-            frame_elapsed: Duration::ZERO,
-            state_elapsed: Duration::ZERO,
-            walk_distance_remaining: 0.0,
-            completed_walk_cycles: 0,
-            personality: Personality::Cheerful,
-            behavior_mode: BehaviorMode::Default,
-            expression_index: 0,
-            expression_elapsed: Duration::ZERO,
-            movement_speed_multiplier: 1.0,
-            hover_intensity: 1.0,
-            action_override: None,
-            hovered: false,
-            dragging: false,
-            hidden: false,
-            intent: BehaviorIntent::Idle,
-            manifest: PetManifest::load_embedded_happy_cappy(),
-            current_animation_name: "idle".to_string(),
-        }
+        Self::new_with_manifest_and_seed(PetManifest::load_embedded_happy_cappy(), seed)
     }
 
     pub fn state(&self) -> PetState {
@@ -450,8 +423,7 @@ impl PetRuntime {
         Duration::from_millis((base_ms / divisor).round() as u64)
     }
 
-    #[cfg(test)]
-    pub fn new_with_manifest_for_test(manifest: PetManifest, seed: u64) -> Self {
+    pub fn new_with_manifest_and_seed(manifest: PetManifest, seed: u64) -> Self {
         let direction = if seed % 2 == 0 {
             Direction::Right
         } else {
@@ -480,6 +452,10 @@ impl PetRuntime {
             manifest,
             current_animation_name: "idle".to_string(),
         }
+    }
+
+    pub fn new_with_manifest(manifest: PetManifest) -> Self {
+        Self::new_with_manifest_and_seed(manifest, 0)
     }
 
     #[cfg(test)]
@@ -993,7 +969,7 @@ mod tests {
             },
             animations,
         };
-        let mut pet = PetRuntime::new_with_manifest_for_test(manifest, 0);
+        let mut pet = PetRuntime::new_with_manifest(manifest);
 
         // Tick 5 idle frames (200ms each). frame_index should land at 5.
         for _ in 0..5 {
@@ -1006,5 +982,37 @@ mod tests {
         pet.tick(Duration::from_millis(200));
         assert_eq!(pet.frame_index(), 0);
         assert_eq!(pet.current_sprite_index(), 0);
+    }
+
+    #[test]
+    fn new_with_manifest_uses_provided_manifest() {
+        use crate::pet::manifest::{Animation, FrameGeometry, PetManifest};
+        use std::collections::BTreeMap;
+
+        let mut animations = BTreeMap::new();
+        animations.insert(
+            "idle".to_string(),
+            Animation {
+                frames: vec![0, 1, 2, 3],
+            },
+        );
+        let manifest = PetManifest {
+            manifest_version: 1,
+            id: "custom".to_string(),
+            display_name: "Custom".to_string(),
+            spritesheet_path: "custom.png".to_string(),
+            frame: FrameGeometry {
+                width: 32,
+                height: 48,
+                columns: 4,
+                rows: 1,
+            },
+            animations,
+        };
+
+        let pet = PetRuntime::new_with_manifest(manifest);
+
+        assert_eq!(pet.manifest().id, "custom");
+        assert_eq!(pet.frame_size(), (32, 48));
     }
 }
