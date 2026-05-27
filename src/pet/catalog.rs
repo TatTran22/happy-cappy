@@ -283,6 +283,21 @@ mod tests {
     }
 
     #[test]
+    fn scan_skips_subdir_without_pet_json() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("not-a-pet")).unwrap();
+        std::fs::write(dir.path().join("not-a-pet").join("random.txt"), b"hi").unwrap();
+
+        let catalog = PetCatalog::scan(test_bundled_pet(), dir.path());
+
+        assert_eq!(catalog.entries().len(), 1); // bundled only
+        assert!(
+            catalog.load_errors().is_empty(),
+            "missing pet.json must NOT be an error"
+        );
+    }
+
+    #[test]
     fn scan_picks_up_one_valid_custom_pet() {
         let dir = tempdir().unwrap();
         write_pet(&dir.path().join("shiba"), "shiba", "Shiba", "sprite.png");
