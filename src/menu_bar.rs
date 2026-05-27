@@ -37,6 +37,7 @@ pub fn command_from_tag(tag: isize) -> Option<AppCommand> {
         MENU_TAG_CHEER_UP => Some(AppCommand::CheerUp),
         MENU_TAG_REREQUEST_ACCESSIBILITY => Some(AppCommand::RequestAccessibilityPermission),
         MENU_TAG_REVEAL_PETS_FOLDER => Some(AppCommand::RevealPetsFolder),
+        MENU_TAG_OPEN_PET_LIBRARY => Some(AppCommand::ShowPicker),
         _ => None,
     }
 }
@@ -408,6 +409,14 @@ mod tests {
         assert_eq!(
             command_from_tag(MENU_TAG_REVEAL_PETS_FOLDER),
             Some(AppCommand::RevealPetsFolder)
+        );
+    }
+
+    #[test]
+    fn command_from_tag_maps_open_pet_library() {
+        assert_eq!(
+            command_from_tag(MENU_TAG_OPEN_PET_LIBRARY),
+            Some(AppCommand::ShowPicker)
         );
     }
 
