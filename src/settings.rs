@@ -46,6 +46,8 @@ pub struct AppSettings {
     pub hide_on_fullscreen: bool,
     #[serde(default)]
     pub last_position: Option<StoredPosition>,
+    #[serde(default)]
+    pub active_pet_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -101,6 +103,7 @@ impl Default for AppSettings {
             avoid_text_cursor: true,
             hide_on_fullscreen: true,
             last_position: None,
+            active_pet_id: None,
         }
     }
 }
@@ -265,6 +268,51 @@ mod tests {
     }
 
     #[test]
+    fn settings_default_has_no_active_pet_id() {
+        assert_eq!(AppSettings::default().active_pet_id, None);
+    }
+
+    #[test]
+    fn settings_deserializes_legacy_file_without_active_pet_id() {
+        let root = std::env::temp_dir().join(format!(
+            "happy-cappy-legacy-active-{}",
+            fastrand::u64(..)
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("settings.json");
+        fs::write(
+            &path,
+            br#"{"personality":"calm","scale":2.0,"movement_speed":1.0,"hover_intensity":1.0,"monitor_behavior":"current_display","pet_visible":true,"focus_mode":false}"#,
+        )
+        .unwrap();
+
+        let loaded =
+            AppSettings::load_or_default_from(&path, bounds(), Vec2 { x: 128.0, y: 128.0 });
+
+        assert_eq!(loaded.active_pet_id, None);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn settings_roundtrip_with_active_pet_id() {
+        let root = std::env::temp_dir().join(format!("happy-cappy-active-rt-{}", fastrand::u64(..)));
+        let path = root.join("settings.json");
+        let settings = AppSettings {
+            active_pet_id: Some("shiba".to_string()),
+            ..AppSettings::default()
+        };
+
+        settings.save_to(&path).unwrap();
+        let loaded =
+            AppSettings::load_or_default_from(&path, bounds(), Vec2 { x: 128.0, y: 128.0 });
+
+        assert_eq!(loaded.active_pet_id, Some("shiba".to_string()));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn sanitize_clamps_numeric_values() {
         let mut settings = AppSettings {
             scale: 99.0,
@@ -342,6 +390,7 @@ mod tests {
                 y: 33.0,
                 display_name: Some("Built-in Display".to_string()),
             }),
+            active_pet_id: None,
         };
 
         settings.save_to(&path).unwrap();
