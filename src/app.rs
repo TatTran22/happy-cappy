@@ -58,6 +58,10 @@ pub enum AppCommand {
     Quit,
 }
 
+fn inner_size_for(frame: (u32, u32), scale: u32) -> LogicalSize<f64> {
+    LogicalSize::new((frame.0 * scale) as f64, (frame.1 * scale) as f64)
+}
+
 pub struct DesktopPetApp {
     window: Option<Arc<Window>>,
     renderer: Option<PetRenderer>,
@@ -145,10 +149,7 @@ impl DesktopPetApp {
     fn create_window(&mut self, event_loop: &ActiveEventLoop) -> bool {
         let attributes = WindowAttributes::default()
             .with_title("Happy Cappy")
-            .with_inner_size({
-                let (fw, fh) = self.pet.frame_size();
-                LogicalSize::new((fw * WINDOW_SCALE) as f64, (fh * WINDOW_SCALE) as f64)
-            })
+            .with_inner_size(inner_size_for(self.pet.frame_size(), WINDOW_SCALE))
             .with_resizable(false)
             .with_decorations(false)
             .with_transparent(true);
@@ -1593,5 +1594,19 @@ mod decide_intent_tests {
         app.settings.avoid_text_cursor = false;
         app.handle_non_quit_command_for_test(AppCommand::SetAvoidTextCursor(true));
         assert!(app.settings.avoid_text_cursor);
+    }
+
+    #[test]
+    fn inner_size_for_multiplies_frame_by_scale() {
+        let size = inner_size_for((64, 48), 2);
+        assert_eq!(size.width, 128.0);
+        assert_eq!(size.height, 96.0);
+    }
+
+    #[test]
+    fn inner_size_for_handles_unit_scale() {
+        let size = inner_size_for((32, 32), 1);
+        assert_eq!(size.width, 32.0);
+        assert_eq!(size.height, 32.0);
     }
 }
