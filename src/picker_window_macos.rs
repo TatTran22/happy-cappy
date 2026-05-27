@@ -40,7 +40,7 @@ mod macos {
     use objc2::msg_send;
     use objc2::rc::Retained;
     use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
-    use objc2::{sel, DefinedClass, MainThreadOnly};
+    use objc2::{sel, ClassType, DefinedClass, MainThreadOnly};
     use objc2::AnyThread;
     use objc2_app_kit::{
         NSBackingStoreType, NSBezelStyle, NSBorderType, NSButton, NSButtonType, NSColor,
@@ -435,19 +435,153 @@ mod macos {
             sel!(onRevealClicked:)
         }
 
-        #[allow(dead_code)]
         pub(super) fn refresh_detail_pane(&self) {
-            // Stub — populated in Task 16.
+            let ivars = self.ivars();
+            let entries = ivars.entries.borrow();
+            let selected = *ivars.selected_index.borrow();
+            let active_id = ivars.active_id.borrow().clone();
+            let entry = selected.and_then(|i| entries.get(i));
+            let Some(entry) = entry else {
+                Self::clear_detail_pane(ivars);
+                return;
+            };
+            if let Some(label) = ivars.detail_name.borrow().as_ref() {
+                label.setStringValue(&NSString::from_str(&entry.base.display_name));
+            }
+            if let Some(label) = ivars.detail_id.borrow().as_ref() {
+                label.setStringValue(&NSString::from_str(&format!("id: {}", entry.base.id)));
+            }
+            if let Some(label) = ivars.detail_source.borrow().as_ref() {
+                let source = match entry.base.source {
+                    PickerSource::Bundled => "bundled".to_string(),
+                    PickerSource::Custom => "custom".to_string(),
+                };
+                let dimensions = if entry.base.frame_width == 0 {
+                    "—".to_string()
+                } else {
+                    format!("{}×{}", entry.base.frame_width, entry.base.frame_height)
+                };
+                label.setStringValue(&NSString::from_str(&format!(
+                    "{source} · {dimensions}"
+                )));
+            }
+            if let Some(label) = ivars.detail_anim.borrow().as_ref() {
+                let text = if entry.base.animations.is_empty() {
+                    "anims: —".to_string()
+                } else {
+                    format!("anims: {}", entry.base.animations.join(", "))
+                };
+                label.setStringValue(&NSString::from_str(&text));
+            }
+            if let Some(label) = ivars.detail_error.borrow().as_ref() {
+                let text = entry.base.error.clone().unwrap_or_default();
+                label.setStringValue(&NSString::from_str(&text));
+            }
+            if let Some(button) = ivars.apply_button.borrow().as_ref() {
+                let can_apply = entry.base.error.is_none() && entry.base.id != active_id;
+                button.setEnabled(can_apply);
+            }
+            if let Some(button) = ivars.reveal_button.borrow().as_ref() {
+                let visible = entry.base.error.is_some();
+                button.setHidden(!visible);
+            }
+            self.refresh_detail_image();
         }
 
-        #[allow(dead_code)]
         pub(super) fn refresh_detail_image(&self) {
-            // Stub — populated in Task 16.
+            let ivars = self.ivars();
+            let entries = ivars.entries.borrow();
+            let selected = match *ivars.selected_index.borrow() {
+                Some(i) => i,
+                None => return,
+            };
+            let Some(entry) = entries.get(selected) else {
+                return;
+            };
+            let Some(image_view) = ivars.detail_image.borrow().as_ref().cloned() else {
+                return;
+            };
+            if entry.frames.is_empty() {
+                image_view.setImage(None);
+                return;
+            }
+            let counter = *ivars.frame_counter.borrow();
+            let idx = counter % entry.frames.len();
+            image_view.setImage(Some(&entry.frames[idx]));
         }
 
-        #[allow(dead_code)]
         pub(super) fn refresh_visible_row_images(&self) {
-            // Stub — populated in Task 16.
+            let ivars = self.ivars();
+            let Some(table) = ivars.table_view.borrow().clone() else {
+                return;
+            };
+            let entries = ivars.entries.borrow();
+            let counter = *ivars.frame_counter.borrow();
+            let visible_range: objc2_foundation::NSRange = unsafe {
+                let visible_rect: NSRect = msg_send![&*table, visibleRect];
+                msg_send![&*table, rowsInRect: visible_rect]
+            };
+            for offset in 0..visible_range.length {
+                let row = visible_range.location + offset;
+                let Some(entry) = entries.get(row as usize) else {
+                    continue;
+                };
+                if entry.frames.is_empty() {
+                    continue;
+                }
+                let idx = counter % entry.frames.len();
+                let row_view: Option<Retained<objc2_app_kit::NSView>> = unsafe {
+                    msg_send![
+                        &*table,
+                        viewAtColumn: 0_i64,
+                        row: row as i64,
+                        makeIfNecessary: false
+                    ]
+                };
+                let Some(row_view) = row_view else { continue };
+                // The row view's first NSImageView subview is the thumbnail (see make_row_view).
+                let subviews: Retained<objc2_foundation::NSArray<objc2_app_kit::NSView>> =
+                    unsafe { msg_send![&*row_view, subviews] };
+                if subviews.is_empty() {
+                    continue;
+                }
+                let first = subviews.objectAtIndex(0);
+                let is_image: bool = unsafe {
+                    msg_send![
+                        &*first,
+                        isKindOfClass: NSImageView::class()
+                    ]
+                };
+                if !is_image {
+                    continue;
+                }
+                // Safe because `isKindOfClass` confirmed `NSImageView`.
+                let image_view: &NSImageView =
+                    unsafe { &*(&*first as *const NSView as *const NSImageView) };
+                image_view.setImage(Some(&entry.frames[idx]));
+            }
+        }
+
+        fn clear_detail_pane(ivars: &PickerTableSourceIvars) {
+            let set_blank = |field: Option<&Retained<NSTextField>>| {
+                if let Some(f) = field {
+                    f.setStringValue(&NSString::from_str(""));
+                }
+            };
+            set_blank(ivars.detail_name.borrow().as_ref());
+            set_blank(ivars.detail_id.borrow().as_ref());
+            set_blank(ivars.detail_source.borrow().as_ref());
+            set_blank(ivars.detail_anim.borrow().as_ref());
+            set_blank(ivars.detail_error.borrow().as_ref());
+            if let Some(image_view) = ivars.detail_image.borrow().as_ref() {
+                image_view.setImage(None);
+            }
+            if let Some(button) = ivars.apply_button.borrow().as_ref() {
+                button.setEnabled(false);
+            }
+            if let Some(button) = ivars.reveal_button.borrow().as_ref() {
+                button.setHidden(true);
+            }
         }
     }
 
@@ -569,7 +703,7 @@ mod macos {
     }
 
     use crate::pet::catalog::{CatalogEntry, PetCatalog};
-    use crate::picker_entries::PickerEntryBase;
+    use crate::picker_entries::{PickerEntryBase, PickerSource};
     use crate::sprite::SpriteError;
 
     #[derive(Debug)]
