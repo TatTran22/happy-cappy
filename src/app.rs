@@ -715,8 +715,16 @@ impl DesktopPetApp {
                 }
             }
             AppCommand::Quit => return false,
-            AppCommand::ActivatePet(_) | AppCommand::RevealPetsFolder => {
-                // wired in subsequent tasks
+            AppCommand::ActivatePet(id) => {
+                if let Err(error) = self.activate_pet(&id) {
+                    warn!("activate_pet failed: {error}");
+                }
+            }
+            AppCommand::RevealPetsFolder => {
+                if let Ok(dir) = crate::settings::custom_pets_dir() {
+                    let _ = std::fs::create_dir_all(&dir);
+                    reveal_in_finder(&dir);
+                }
             }
         }
         true
@@ -1129,6 +1137,15 @@ impl ApplicationHandler<AppCommand> for DesktopPetApp {
         }
     }
 }
+
+#[cfg(target_os = "macos")]
+fn reveal_in_finder(path: &std::path::Path) {
+    use std::process::Command;
+    let _ = Command::new("open").arg(path).spawn();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn reveal_in_finder(_path: &std::path::Path) {}
 
 pub(crate) fn decide_intent(
     snapshot: &crate::workspace::WorkspaceSnapshot,
