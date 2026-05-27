@@ -141,6 +141,7 @@ pub struct DesktopPetApp {
     next_tick_at: Instant,
     menu_bar: Option<MenuBarController>,
     settings_window: Option<SettingsWindowController>,
+    picker: Option<crate::picker_window_macos::PickerWindowController>,
     settings: AppSettings,
     settings_path: Option<PathBuf>,
     active_monitor_name: Option<String>,
@@ -181,6 +182,7 @@ impl DesktopPetApp {
             next_tick_at: now,
             menu_bar: None,
             settings_window: None,
+            picker: None,
             settings,
             settings_path: default_settings_path().ok(),
             active_monitor_name: None,
@@ -222,6 +224,7 @@ impl DesktopPetApp {
             next_tick_at: now,
             menu_bar: None,
             settings_window: None,
+            picker: None,
             settings,
             settings_path: default_settings_path().ok(),
             active_monitor_name: None,
@@ -523,6 +526,29 @@ impl DesktopPetApp {
         let (catalog, _) = build_startup_catalog();
         self.catalog = catalog;
         self.sync_pet_submenu();
+    }
+
+    #[cfg(not(test))]
+    fn ensure_picker_window(
+        &mut self,
+    ) -> Option<&crate::picker_window_macos::PickerWindowController> {
+        if self.picker.is_none() {
+            self.picker = crate::picker_window_macos::PickerWindowController::new(
+                self.event_proxy.clone(),
+            );
+        }
+        self.picker.as_ref()
+    }
+
+    #[cfg(test)]
+    fn ensure_picker_window(
+        &mut self,
+    ) -> Option<&crate::picker_window_macos::PickerWindowController> {
+        let proxy = self.event_proxy.clone()?;
+        if self.picker.is_none() {
+            self.picker = crate::picker_window_macos::PickerWindowController::new(proxy);
+        }
+        self.picker.as_ref()
     }
 
     pub fn activate_pet(&mut self, id: &str) -> Result<(), ActivationError> {
