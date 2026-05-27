@@ -35,7 +35,7 @@ const MAX_TICK_DELTA: Duration = Duration::from_secs(1);
 const FALLBACK_BOUNDS_WIDTH: f32 = 800.0;
 const FALLBACK_BOUNDS_HEIGHT: f32 = 600.0;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AppCommand {
     OpenSettings,
     ShowPet,
@@ -56,6 +56,8 @@ pub enum AppCommand {
     Nap,
     CheerUp,
     Quit,
+    ActivatePet(String),
+    RevealPetsFolder,
 }
 
 fn inner_size_for(frame: (u32, u32), scale: u32) -> LogicalSize<f64> {
@@ -583,6 +585,9 @@ impl DesktopPetApp {
                 }
             }
             AppCommand::Quit => return false,
+            AppCommand::ActivatePet(_) | AppCommand::RevealPetsFolder => {
+                // wired in subsequent tasks
+            }
         }
         true
     }
