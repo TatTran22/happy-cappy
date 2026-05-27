@@ -6,9 +6,6 @@
 //! [`crate::command_target_macos::CommandTarget`].
 
 #[cfg(not(target_os = "macos"))]
-use crate::picker_entries::PickerEntryBase;
-
-#[cfg(not(target_os = "macos"))]
 pub struct PickerWindowController;
 
 #[cfg(not(target_os = "macos"))]
@@ -27,7 +24,7 @@ impl PickerWindowController {
         false
     }
 
-    pub fn sync_entries(&self, _entries: Vec<PickerEntryBase>, _active_id: &str) {}
+    pub fn sync_entries<T>(&self, _entries: Vec<T>, _active_id: &str) {}
 }
 
 #[cfg(target_os = "macos")]
@@ -42,12 +39,14 @@ mod macos {
     use objc2::define_class;
     use objc2::msg_send;
     use objc2::rc::Retained;
-    use objc2::runtime::{AnyObject, NSObjectProtocol};
+    use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
     use objc2::{sel, DefinedClass, MainThreadOnly};
     use objc2::AnyThread;
     use objc2_app_kit::{
-        NSButton, NSControlTextEditingDelegate, NSImageView, NSTableView, NSTableViewDataSource,
-        NSTableViewDelegate, NSTextField, NSView,
+        NSBackingStoreType, NSBezelStyle, NSBorderType, NSButton, NSButtonType, NSColor,
+        NSControlTextEditingDelegate, NSFloatingWindowLevel, NSFont, NSImageView, NSPanel,
+        NSScrollView, NSTableColumn, NSTableView, NSTableViewDataSource, NSTableViewDelegate,
+        NSTextField, NSView, NSWindowStyleMask,
     };
     use objc2_app_kit::NSImage;
     use objc2_core_foundation::CFRetained;
@@ -56,23 +55,240 @@ mod macos {
         CGImageAlphaInfo, CGImageByteOrderInfo,
     };
     use objc2_core_foundation::CGSize;
-    use objc2_foundation::{MainThreadMarker, NSInteger, NSObject, NSString};
+    use objc2_foundation::{
+        ns_string, MainThreadMarker, NSIndexSet, NSInteger, NSObject, NSPoint, NSRect, NSSize,
+        NSString, NSUInteger,
+    };
 
-    /// Placeholder — the real implementation arrives in subsequent tasks.
-    pub struct PickerWindowController;
+    const PANEL_WIDTH: f64 = 480.0;
+    const PANEL_HEIGHT: f64 = 420.0;
+    const LIST_WIDTH: f64 = 200.0;
+    const DETAIL_X: f64 = LIST_WIDTH;
+    const DETAIL_WIDTH: f64 = PANEL_WIDTH - LIST_WIDTH;
+    const PREVIEW_SIZE: f64 = 128.0;
+    const ROW_HEIGHT: f64 = 44.0;
+
+    pub struct PickerWindowController {
+        panel: Retained<NSPanel>,
+        source: Retained<PickerTableSource>,
+    }
 
     impl PickerWindowController {
-        pub fn new(_proxy: EventLoopProxy<AppCommand>) -> Option<Self> {
-            None
+        pub fn new(proxy: EventLoopProxy<AppCommand>) -> Option<Self> {
+            let mtm = MainThreadMarker::new()?;
+            let source = PickerTableSource::new(mtm, proxy);
+
+            let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
+                NSPanel::alloc(mtm),
+                NSRect::new(
+                    NSPoint::new(0.0, 0.0),
+                    NSSize::new(PANEL_WIDTH, PANEL_HEIGHT),
+                ),
+                NSWindowStyleMask::Titled
+                    | NSWindowStyleMask::Closable
+                    | NSWindowStyleMask::UtilityWindow,
+                NSBackingStoreType::Buffered,
+                false,
+            );
+            unsafe {
+                panel.setReleasedWhenClosed(false);
+            }
+            panel.setTitle(ns_string!("Pet Library"));
+            panel.setFloatingPanel(true);
+            panel.setHidesOnDeactivate(false);
+            panel.setLevel(NSFloatingWindowLevel);
+
+            let content_view = NSView::initWithFrame(
+                NSView::alloc(mtm),
+                NSRect::new(
+                    NSPoint::new(0.0, 0.0),
+                    NSSize::new(PANEL_WIDTH, PANEL_HEIGHT),
+                ),
+            );
+            panel.setContentView(Some(&content_view));
+
+            // ── Left: scroll view + table view ──────────────────────────────
+            let scroll = NSScrollView::initWithFrame(
+                NSScrollView::alloc(mtm),
+                NSRect::new(
+                    NSPoint::new(0.0, 0.0),
+                    NSSize::new(LIST_WIDTH, PANEL_HEIGHT),
+                ),
+            );
+            scroll.setHasVerticalScroller(true);
+            scroll.setBorderType(NSBorderType::NoBorder);
+
+            let table = NSTableView::initWithFrame(
+                NSTableView::alloc(mtm),
+                NSRect::new(
+                    NSPoint::new(0.0, 0.0),
+                    NSSize::new(LIST_WIDTH, PANEL_HEIGHT),
+                ),
+            );
+            table.setRowHeight(ROW_HEIGHT);
+            table.setHeaderView(None);
+
+            let column = NSTableColumn::initWithIdentifier(
+                NSTableColumn::alloc(mtm),
+                &NSString::from_str("pet"),
+            );
+            unsafe {
+                column.setWidth(LIST_WIDTH - 4.0);
+                table.addTableColumn(&column);
+                let delegate: &ProtocolObject<dyn NSTableViewDelegate> =
+                    ProtocolObject::from_ref(&*source);
+                table.setDelegate(Some(delegate));
+                let data_source: &ProtocolObject<dyn NSTableViewDataSource> =
+                    ProtocolObject::from_ref(&*source);
+                table.setDataSource(Some(data_source));
+            }
+            scroll.setDocumentView(Some(table.as_ref()));
+            content_view.addSubview(&scroll);
+            *source.ivars().table_view.borrow_mut() = Some(table);
+
+            // ── Right: detail pane ─────────────────────────────────────────
+            let detail = NSView::initWithFrame(
+                NSView::alloc(mtm),
+                NSRect::new(
+                    NSPoint::new(DETAIL_X, 0.0),
+                    NSSize::new(DETAIL_WIDTH, PANEL_HEIGHT),
+                ),
+            );
+            content_view.addSubview(&detail);
+
+            let preview = NSImageView::initWithFrame(
+                NSImageView::alloc(mtm),
+                NSRect::new(
+                    NSPoint::new(
+                        (DETAIL_WIDTH - PREVIEW_SIZE) / 2.0,
+                        PANEL_HEIGHT - PREVIEW_SIZE - 24.0,
+                    ),
+                    NSSize::new(PREVIEW_SIZE, PREVIEW_SIZE),
+                ),
+            );
+            detail.addSubview(&preview);
+            *source.ivars().detail_image.borrow_mut() = Some(preview);
+
+            let mut next_y = PANEL_HEIGHT - PREVIEW_SIZE - 60.0;
+            let name_field = make_detail_label(mtm, "", &detail, next_y, 20.0, true);
+            *source.ivars().detail_name.borrow_mut() = Some(name_field);
+            next_y -= 24.0;
+            let id_field = make_detail_label(mtm, "", &detail, next_y, 16.0, false);
+            *source.ivars().detail_id.borrow_mut() = Some(id_field);
+            next_y -= 20.0;
+            let source_field = make_detail_label(mtm, "", &detail, next_y, 16.0, false);
+            *source.ivars().detail_source.borrow_mut() = Some(source_field);
+            next_y -= 20.0;
+            let anim_field = make_detail_label(mtm, "", &detail, next_y, 16.0, false);
+            *source.ivars().detail_anim.borrow_mut() = Some(anim_field);
+            next_y -= 28.0;
+            let error_field = make_detail_label(mtm, "", &detail, next_y, 16.0, false);
+            {
+                let red: Retained<NSColor> = NSColor::redColor();
+                error_field.setTextColor(Some(&red));
+            }
+            *source.ivars().detail_error.borrow_mut() = Some(error_field);
+
+            // Bottom buttons
+            let apply = NSButton::initWithFrame(
+                NSButton::alloc(mtm),
+                NSRect::new(
+                    NSPoint::new(DETAIL_WIDTH - 92.0 - 12.0, 12.0),
+                    NSSize::new(92.0, 28.0),
+                ),
+            );
+            apply.setTitle(ns_string!("Apply"));
+            unsafe {
+                apply.setBezelStyle(NSBezelStyle::Push);
+                apply.setButtonType(NSButtonType::MomentaryPushIn);
+                let target: &AnyObject = source.as_ref();
+                apply.setTarget(Some(target));
+                apply.setAction(Some(PickerTableSource::apply_selector()));
+            }
+            detail.addSubview(&apply);
+            *source.ivars().apply_button.borrow_mut() = Some(apply);
+
+            let reveal = NSButton::initWithFrame(
+                NSButton::alloc(mtm),
+                NSRect::new(NSPoint::new(12.0, 12.0), NSSize::new(140.0, 28.0)),
+            );
+            reveal.setTitle(ns_string!("Reveal in Finder"));
+            unsafe {
+                reveal.setBezelStyle(NSBezelStyle::Push);
+                reveal.setButtonType(NSButtonType::MomentaryPushIn);
+                let target: &AnyObject = source.as_ref();
+                reveal.setTarget(Some(target));
+                reveal.setAction(Some(PickerTableSource::reveal_selector()));
+            }
+            detail.addSubview(&reveal);
+            *source.ivars().reveal_button.borrow_mut() = Some(reveal);
+
+            panel.center();
+
+            Some(Self { panel, source })
         }
 
-        pub fn show(&self) {}
-        pub fn hide(&self) {}
+        pub fn show(&self) {
+            self.panel.makeKeyAndOrderFront(None);
+            self.panel.orderFrontRegardless();
+            // Animation timer start arrives in Task 17.
+        }
+
+        pub fn hide(&self) {
+            self.panel.orderOut(None);
+            // Animation timer stop arrives in Task 17.
+        }
+
         pub fn is_visible(&self) -> bool {
-            false
+            self.panel.isVisible()
         }
 
-        pub fn sync_entries(&self, _entries: Vec<PickerEntryBase>, _active_id: &str) {}
+        pub fn sync_entries(&self, entries: Vec<PickerEntry>, active_id: &str) {
+            let ivars = self.source.ivars();
+            *ivars.active_id.borrow_mut() = active_id.to_string();
+            *ivars.entries.borrow_mut() = entries;
+            let new_selection = {
+                let entries = ivars.entries.borrow();
+                if entries.is_empty() {
+                    None
+                } else {
+                    entries
+                        .iter()
+                        .position(|e| e.base.id == *active_id)
+                        .or(Some(0))
+                }
+            };
+            *ivars.selected_index.borrow_mut() = new_selection;
+            if let Some(table) = ivars.table_view.borrow().as_ref().cloned() {
+                table.reloadData();
+                if let Some(row) = new_selection {
+                    let index_set = NSIndexSet::indexSetWithIndex(row as NSUInteger);
+                    table.selectRowIndexes_byExtendingSelection(&index_set, false);
+                }
+            }
+            self.source.refresh_detail_pane();
+        }
+    }
+
+    fn make_detail_label(
+        mtm: MainThreadMarker,
+        text: &str,
+        parent: &NSView,
+        y: f64,
+        height: f64,
+        bold: bool,
+    ) -> Retained<NSTextField> {
+        let field = NSTextField::labelWithString(&NSString::from_str(text), mtm);
+        field.setFrame(NSRect::new(
+            NSPoint::new(16.0, y),
+            NSSize::new(DETAIL_WIDTH - 32.0, height),
+        ));
+        if bold {
+            let bold_font = NSFont::boldSystemFontOfSize(18.0);
+            field.setFont(Some(&bold_font));
+        }
+        parent.addSubview(&field);
+        field
     }
 
     #[allow(dead_code)]
