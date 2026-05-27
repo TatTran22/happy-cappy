@@ -22,8 +22,7 @@ The menu bar submenu from sub-project 2 stays as the quick-swap path. The picker
 
 **In scope:**
 - New module `src/picker_window_macos.rs` (cfg-gated on `target_os = "macos"`, stub on other platforms — same shape as `src/settings_window_macos.rs`).
-- `PetCatalog::scan` change: collect per-entry load failures into a `Vec<CatalogLoadFailure>` field instead of dropping them. Existing logging stays.
-- `AppCommand` additions: `ShowPicker`, `SyncPicker { entries, active_id }`. Existing `RefreshPetMenu`, `ActivatePet(String)`, `RevealPetsFolder` are reused.
+- `AppCommand` additions: `ShowPicker`. Existing `RefreshPetMenu`, `ActivatePet(String)`, `RevealPetsFolder` are reused. `PetCatalog::load_errors()` (SP2) already exposes per-entry load failures; no catalog change required.
 - `DesktopPetApp` additions: `Option<PickerWindowController>` field, `show_picker()` helper, extension of `refresh_catalog()` to also sync the picker when visible.
 - Menu wiring: new "Pet Library…" item between the **Pet ▸** submenu and **Settings…**, plus its selector on `CommandTarget`.
 - AppKit list/detail UI: `NSPanel` containing `NSTableView` (left) + custom detail `NSView` (right) with Apply button. Single shared `NSTimer` drives idle-frame animation for visible rows and the detail preview.
@@ -52,22 +51,23 @@ The menu bar submenu from sub-project 2 stays as the quick-swap path. The picker
 │  picker_window_macos.rs (NEW, target_os = "macos")            │
 │   - PickerWindowController (NSPanel + NSTableView + detail)   │
 │   - PickerEntry { id, display_name, source, frame_w, frame_h, │
-│       animations, frames: Vec<Retained<NSImage>>, error }     │
-│   - PreviewTicker (NSTimer 10fps, updates every visible row   │
-│       and the detail preview)                                 │
+│       animations, frames: Vec<Retained<NSImage>>, error,      │
+│       source_path }                                           │
+│   - PickerTableSource (NSObject; NSTableView data source +    │
+│       delegate + timer target)                                │
+│   - 10 fps NSTimer driven from PickerTableSource: updates     │
+│       every visible row and the detail preview                │
 │   - Click row → select; Apply → AppCommand::ActivatePet       │
 │   - Reveal in Finder → AppCommand::RevealPetsFolder           │
 └──────────────────────────────────────────────────────────────┘
         ▲
-        │ pull: build_picker_entries(&catalog, &failures, mtm)
+        │ pull: build_picker_entries(&catalog, mtm)
         │
 ┌──────────────────────────────────────────────────────────────┐
-│  pet/catalog.rs (SP2; small extension)                        │
-│   - PetCatalog::scan still consumes the bundled pet and       │
-│     enumerates custom dirs, but now retains failures.         │
-│   - NEW: PetCatalog::failures() -> &[CatalogLoadFailure]      │
-│   - NEW: struct CatalogLoadFailure { id_or_dirname, path,    │
-│       error: CatalogLoadError }                               │
+│  pet/catalog.rs (SP2, unchanged)                              │
+│   - PetCatalog::entries() — OK pets                           │
+│   - PetCatalog::load_errors() — &[CatalogLoadError]           │
+│     (already wired in SP2; picker just consumes it)           │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -124,26 +124,12 @@ pub enum PickerSource { Bundled, Custom }
 
 `Retained<NSImage>` is `Clone` via `Retained::clone`, so `PickerEntry: Clone` works.
 
-```rust
-// pet/catalog.rs (extension)
-pub struct CatalogLoadFailure {
-    pub id_or_dirname: String,  // pet id if manifest parsed, else folder name
-    pub path: PathBuf,           // the offending pet directory
-    pub error: CatalogLoadError, // existing enum from SP2
-}
+**No catalog code changes.** `PetCatalog::load_errors() -> &[CatalogLoadError]` already exists (SP2). Each variant of `CatalogLoadError` carries enough path information for the picker to derive a folder name and a "Reveal in Finder" target:
 
-impl PetCatalog {
-    pub fn failures(&self) -> &[CatalogLoadFailure] { &self.failures }
-}
-```
-
-Catalog scan flow (changes vs SP2):
-1. Insert bundled (unchanged).
-2. For each subdirectory in `pets/`:
-   - `load_custom_pet(dir)` already returns `Result<Option<CatalogEntry>, CatalogLoadError>`.
-   - On `Ok(Some(entry))`: insert (dedup against bundled wins — unchanged).
-   - On `Ok(None)`: skip (it's a non-directory or a hidden file — unchanged).
-   - On `Err(error)`: push to `failures` with the directory's folder name as `id_or_dirname` and the absolute dir path. `warn!` logging stays. **(NEW: previously the error was logged and dropped.)**
+- `ManifestParse { path: <dir>/pet.json, error }` → folder = `path.parent().file_name()`.
+- `SpritesheetMissing { manifest_path: <dir>/pet.json, sprite_path }` → folder = `manifest_path.parent().file_name()`.
+- `DuplicateId { id, kept, dropped }` → folder = `dropped.parent().file_name()`.
+- `DirRead { path, error }` → skipped from the picker list (it's a catalog-wide read error, not a per-pet error). It is still logged via `warn!` like in SP2.
 
 ## 6. Sync Flow
 
@@ -222,30 +208,31 @@ fn on_tick(&self) {
 fn build_preview_frames(
     catalog_entry: &CatalogEntry,
     mtm: MainThreadMarker,
-) -> Result<Vec<Retained<NSImage>>, SpriteError> {
-    // 1. Load spritesheet (already cached on disk by SP2)
+) -> Result<Vec<Retained<NSImage>>, PreviewBuildError> {
+    // 1. Load spritesheet using SP1's API (path + FrameGeometry).
     let sheet = SpriteSheet::load(
         &catalog_entry.spritesheet_path,
-        catalog_entry.manifest.frame.width,
-        catalog_entry.manifest.frame.height,
-        catalog_entry.manifest.frame.columns,
-        catalog_entry.manifest.frame.rows,
+        &catalog_entry.manifest.frame,
     )?;
-    // 2. Pick the idle animation (or first defined animation as fallback)
+    // 2. Pick the idle animation (or first defined animation as fallback).
     let anim = catalog_entry.manifest.animations.get("idle")
         .or_else(|| catalog_entry.manifest.animations.values().next())
-        .ok_or(SpriteError::NoAnimation)?;
-    // 3. For each frame index, decode RGBA → CGImage → NSImage
+        .ok_or(PreviewBuildError::NoAnimation)?;
+    // 3. For each frame index, crop RGBA → CGImage → NSImage.
     anim.frames.iter()
         .map(|&fi| {
-            let rgba = sheet.frame_rgba(fi as usize);
-            rgba_to_nsimage(&rgba, sheet.frame_width(), sheet.frame_height(), mtm)
+            let rgba = crop_frame_rgba(&sheet, fi as usize);
+            Ok(rgba_to_nsimage(&rgba, sheet.geometry().width, sheet.geometry().height, mtm))
         })
         .collect()
 }
 ```
 
-`SpriteSheet::frame_rgba` exists from SP1. `rgba_to_nsimage` is a new helper in `picker_window_macos.rs` (~30 LOC) using the `core-graphics` crate as a direct `Cargo.toml` dependency. It creates a `CGDataProvider` from the RGBA bytes, builds a `CGImage` (8 bits per component, `kCGImageAlphaPremultipliedLast`, sRGB color space), and constructs `NSImage::initWithCGImage_size`.
+`SpriteSheet::load(path, &FrameGeometry)` returns `SpriteSheet` with `image() -> &RgbaImage` and `frame_rect(idx) -> FrameRect`. The new helper `crop_frame_rgba(&SpriteSheet, frame_idx) -> Vec<u8>` copies the rectangle's pixels into a packed RGBA buffer.
+
+`rgba_to_nsimage` lives in `picker_window_macos.rs` (~30 LOC) and uses the existing `objc2-core-graphics` dependency (Cargo.toml feature add: `CGImage`, `CGDataProvider`, `CGColorSpace`). It creates a `CGDataProvider` from the RGBA bytes, builds a `CGImage` (8 bits per component, `kCGImageAlphaPremultipliedLast`, sRGB color space), and constructs `NSImage::initWithCGImage_size`.
+
+`PreviewBuildError` is a small enum local to `picker_window_macos.rs` wrapping `SpriteError` and a `NoAnimation` variant — surfaced into the entry's `error` field if frame decoding fails.
 
 **Memory** at typical usage (one bundled pet + ~10 custom pets, each ~8 idle frames @ 64×64×4 RGBA):
 - ~11 pets × 8 frames × 64×64×4 ≈ 1.4 MB. NSImage retains the underlying bitmap.
@@ -298,15 +285,14 @@ HC ▸
 
 New tag constant: `MENU_TAG_OPEN_PET_LIBRARY = 1202` (slots into the existing pet-related tag block from SP2).
 
-**New `AppCommand` variants:**
+**New `AppCommand` variant:**
 ```rust
 ShowPicker,
-SyncPicker { entries: Vec<PickerEntry>, active_id: String },
 ```
 
 Reused (no change): `ActivatePet(String)`, `RevealPetsFolder`, `RefreshPetMenu`.
 
-`SyncPicker` is dispatched internally by `app.rs` after a catalog refresh, so the picker module only handles a "here are the latest entries" event. The variant exists so the picker can be updated from event-loop callbacks without exposing `PickerWindowController` to the public API surface — keeping the dispatch model consistent with the other AppCommand-driven flows.
+`app.rs` calls `picker.sync_entries(...)` directly after `refresh_catalog()`. No AppCommand indirection is needed because the picker controller is owned by `DesktopPetApp` and accessed through the same `&mut self` borrow that already handles the refresh.
 
 **`CommandTarget` (`command_target_macos.rs`)** gains one selector:
 
@@ -344,20 +330,17 @@ The policy mirrors SP2:
 
 **Unit testable (pure Rust, no AppKit):**
 
-1. `pet/catalog.rs` — `failures` collection:
-   - Scan dir with broken JSON → `failures.len() == 1`, error variant is `ManifestParse`.
-   - Scan dir with missing spritesheet → `failures` has `SpritesheetMissing`.
-   - Scan dir with duplicate id → `failures` has `DuplicateId`.
-   - Scan dir with unreadable subdir (best effort: simulate via permission-denied file). If platform-fragile, skip.
-   - Successful scan → `failures.is_empty()`.
+1. `pet/catalog.rs` — already-covered SP2 tests prove `load_errors()` populates correctly. No new catalog tests required.
 
-2. `app.rs` — `build_picker_entries` decomposed:
-   - Split into `build_picker_entries_base(catalog) -> Vec<PickerEntryBase>` (no NSImage; pure) and `attach_preview_frames(&mut PickerEntry, mtm)` (AppKit).
-   - Tests cover `build_picker_entries_base`:
-     - Ordering: bundled first, then OK custom alphabetical, then failures alphabetical.
-     - Failure → entry with `error.is_some()`, `frames: vec![]`, `source: Custom`.
-     - Active id passthrough.
-     - Empty catalog → entries contain only bundled.
+2. `app.rs` (or a small `picker_entries.rs` submodule) — `build_picker_entries_base` decomposed:
+   - Pure function `build_picker_entries_base(catalog: &PetCatalog) -> Vec<PickerEntryBase>` (no AppKit; no `MainThreadMarker`).
+   - Tests cover ordering, error mapping, and entry construction:
+     - Ordering: bundled first, then OK custom alphabetical (case-insensitive — matches SP2 `catalog.entries()` order), then error rows alphabetical at the bottom.
+     - `ManifestParse` error → entry with folder name as `display_name`, `error: Some(_)`, `source: Custom`, `source_path: Some(<pet_dir>)`.
+     - `SpritesheetMissing` error → same shape, with the right folder name + message.
+     - `DuplicateId` error → folder name of the *dropped* dir, message mentions the id.
+     - `DirRead` error → does NOT produce an entry (catalog-wide error).
+     - Empty catalog → exactly one entry (bundled).
 
 3. `CatalogLoadError → user message` mapping function (`format_catalog_error(&CatalogLoadError) -> String`):
    - All four variants produce non-empty strings under ~140 chars.
@@ -393,14 +376,15 @@ The policy mirrors SP2:
 | SP3 needs | Already shipped in SP2? |
 |---|---|
 | `PetCatalog::scan` | ✅ |
-| `CatalogEntry`, `CatalogSource`, `CatalogLoadError` | ✅ (extending with `CatalogLoadFailure`) |
+| `PetCatalog::load_errors() -> &[CatalogLoadError]` | ✅ |
+| `CatalogEntry`, `CatalogSource`, `CatalogLoadError` | ✅ (consumed unchanged) |
 | `DesktopPetApp::activate_pet` | ✅ (reused via `AppCommand::ActivatePet`) |
 | `DesktopPetApp::refresh_catalog` | ✅ |
 | `AppCommand::ActivatePet(String)` | ✅ |
 | `AppCommand::RevealPetsFolder` | ✅ |
 | `AppCommand::RefreshPetMenu` | ✅ (extending: also syncs picker when visible) |
 | `CommandTarget` selector pattern | ✅ (adding `openPetLibrary:`) |
-| `SpriteSheet::frame_rgba` | ✅ (SP1) |
+| `SpriteSheet::load`, `frame_rect`, `image` | ✅ (SP1) — `crop_frame_rgba` is a new picker-local helper that uses these |
 | `settings_window_macos.rs` pattern to mirror | ✅ |
 
 No blocking gaps. SP3 layers cleanly on SP2 with one small backward-compatible catalog extension (`failures` field).
