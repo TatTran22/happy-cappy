@@ -166,6 +166,14 @@ impl MenuBarController {
                 ns_string!("q"),
             )
         };
+        let pet_library_item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                ns_string!("Pet Library..."),
+                None,
+                ns_string!(""),
+            )
+        };
 
         settings_item.setTag(MENU_TAG_SETTINGS);
         show_hide_item.setTag(MENU_TAG_SHOW_HIDE);
@@ -174,6 +182,7 @@ impl MenuBarController {
         cheer_up_item.setTag(MENU_TAG_CHEER_UP);
         reset_item.setTag(MENU_TAG_RESET);
         quit_item.setTag(MENU_TAG_QUIT);
+        pet_library_item.setTag(MENU_TAG_OPEN_PET_LIBRARY);
 
         let target_object: &AnyObject = target.as_ref();
         for item in [
@@ -184,6 +193,7 @@ impl MenuBarController {
             &cheer_up_item,
             &reset_item,
             &quit_item,
+            &pet_library_item,
         ] {
             unsafe {
                 item.setTarget(Some(target_object));
@@ -194,6 +204,7 @@ impl MenuBarController {
         }
 
         menu.addItem(&pet_root_item);
+        menu.addItem(&pet_library_item);
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         menu.addItem(&settings_item);
         menu.addItem(&show_hide_item);
