@@ -1,4 +1,5 @@
 use std::{
+    path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -17,7 +18,7 @@ use crate::{
     interaction::{alpha_hit_test_with_flip, InteractionEvent, InteractionState, MouseButtonKind},
     menu_bar::MenuBarController,
     micro_action::MicroAction,
-    pet::{Direction, PetRuntime, PetState},
+    pet::{BundledPet, Direction, PetCatalog, PetRuntime, PetState},
     physics::{Bounds, Physics, Vec2},
     renderer::PetRenderer,
     settings::{default_settings_path, AppSettings, SettingsError},
@@ -64,18 +65,57 @@ fn inner_size_for(frame: (u32, u32), scale: u32) -> LogicalSize<f64> {
     LogicalSize::new((frame.0 * scale) as f64, (frame.1 * scale) as f64)
 }
 
+fn build_startup_catalog() -> (PetCatalog, PathBuf) {
+    use crate::pet::manifest::PetManifest;
+    use crate::settings::custom_pets_dir;
+
+    let bundled_manifest = PetManifest::load_embedded_happy_cappy();
+    let bundled_sprite = current_resource_paths()
+        .map(|p| p.sprite_sheet)
+        .unwrap_or_else(|_| PathBuf::from("assets/happy_cappy_spritesheet.png"));
+    let bundled = BundledPet {
+        manifest: bundled_manifest,
+        spritesheet_path: bundled_sprite,
+    };
+
+    let custom_dir = custom_pets_dir()
+        .unwrap_or_else(|_| PathBuf::from("/tmp/happy-cappy-pets-fallback"));
+
+    let catalog = PetCatalog::scan(bundled, &custom_dir);
+
+    for error in catalog.load_errors() {
+        warn!("catalog: {error}");
+    }
+
+    (catalog, custom_dir)
+}
+
+fn resolve_active_pet_id(catalog: &PetCatalog, desired: Option<&str>) -> String {
+    let desired_id = desired.unwrap_or("happy-cappy");
+    if catalog.lookup(desired_id).is_some() {
+        return desired_id.to_string();
+    }
+    warn!(
+        "activate_pet: persisted id missing, falling back to bundled requested={:?}",
+        desired_id
+    );
+    "happy-cappy".to_string()
+}
+
 pub struct DesktopPetApp {
     window: Option<Arc<Window>>,
     renderer: Option<PetRenderer>,
     sprite_sheet: Option<SpriteSheet>,
     pet: PetRuntime,
+    catalog: PetCatalog,
+    active_pet_id: String,
     physics: Physics,
     last_tick: Instant,
     next_tick_at: Instant,
     menu_bar: Option<MenuBarController>,
     settings_window: Option<SettingsWindowController>,
     settings: AppSettings,
-    settings_path: Option<std::path::PathBuf>,
+    settings_path: Option<PathBuf>,
     active_monitor_name: Option<String>,
     pet_visible: bool,
     auto_hidden: bool,
@@ -94,17 +134,27 @@ impl DesktopPetApp {
         let seed = fastrand::u64(..);
         let now = Instant::now();
 
+        let (catalog, _custom_dir) = build_startup_catalog();
+        let settings = AppSettings::default();
+        let active_pet_id = resolve_active_pet_id(&catalog, settings.active_pet_id.as_deref());
+        let active_entry = catalog
+            .lookup(&active_pet_id)
+            .expect("bundled is always present");
+        let pet = PetRuntime::new_with_manifest_and_seed(active_entry.manifest.clone(), seed);
+
         Self {
             window: None,
             renderer: None,
             sprite_sheet: None,
-            pet: PetRuntime::new_with_seed(seed),
+            pet,
+            catalog,
+            active_pet_id,
             physics: default_physics(),
             last_tick: now,
             next_tick_at: now,
             menu_bar: None,
             settings_window: None,
-            settings: AppSettings::default(),
+            settings,
             settings_path: default_settings_path().ok(),
             active_monitor_name: None,
             pet_visible: true,
@@ -125,17 +175,27 @@ impl DesktopPetApp {
         let seed = fastrand::u64(..);
         let now = Instant::now();
 
+        let (catalog, _custom_dir) = build_startup_catalog();
+        let settings = AppSettings::default();
+        let active_pet_id = resolve_active_pet_id(&catalog, settings.active_pet_id.as_deref());
+        let active_entry = catalog
+            .lookup(&active_pet_id)
+            .expect("bundled is always present");
+        let pet = PetRuntime::new_with_manifest_and_seed(active_entry.manifest.clone(), seed);
+
         Self {
             window: None,
             renderer: None,
             sprite_sheet: None,
-            pet: PetRuntime::new_with_seed(seed),
+            pet,
+            catalog,
+            active_pet_id,
             physics: default_physics(),
             last_tick: now,
             next_tick_at: now,
             menu_bar: None,
             settings_window: None,
-            settings: AppSettings::default(),
+            settings,
             settings_path: default_settings_path().ok(),
             active_monitor_name: None,
             pet_visible: true,
@@ -1364,6 +1424,38 @@ mod tests {
                 display_name: None,
             })
         );
+    }
+
+    #[test]
+    fn resolve_active_pet_id_returns_bundled_when_desired_missing() {
+        use crate::pet::manifest::{Animation, FrameGeometry, PetManifest};
+        use crate::pet::{BundledPet, PetCatalog};
+        use std::collections::BTreeMap;
+        let tmp = tempfile::tempdir().unwrap();
+
+        let mut animations = BTreeMap::new();
+        animations.insert(
+            "idle".to_string(),
+            Animation {
+                frames: vec![0, 1, 2, 3],
+            },
+        );
+        let bundled = BundledPet {
+            manifest: PetManifest {
+                manifest_version: 1,
+                id: "happy-cappy".to_string(),
+                display_name: "Happy Cappy".to_string(),
+                spritesheet_path: "x.png".to_string(),
+                frame: FrameGeometry { width: 16, height: 16, columns: 4, rows: 1 },
+                animations,
+            },
+            spritesheet_path: PathBuf::from("/bundled/x.png"),
+        };
+        let catalog = PetCatalog::scan(bundled, tmp.path());
+
+        assert_eq!(resolve_active_pet_id(&catalog, Some("ghost")), "happy-cappy");
+        assert_eq!(resolve_active_pet_id(&catalog, None), "happy-cappy");
+        assert_eq!(resolve_active_pet_id(&catalog, Some("happy-cappy")), "happy-cappy");
     }
 
     #[test]
