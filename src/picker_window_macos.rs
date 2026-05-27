@@ -37,6 +37,17 @@ mod macos {
     use crate::app::AppCommand;
     use crate::sprite::SpriteSheet;
 
+    use objc2::rc::Retained;
+    use objc2::AnyThread;
+    use objc2_app_kit::NSImage;
+    use objc2_core_foundation::CFRetained;
+    use objc2_core_graphics::{
+        CGBitmapInfo, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGImage,
+        CGImageAlphaInfo, CGImageByteOrderInfo,
+    };
+    use objc2_core_foundation::CGSize;
+    use objc2_foundation::MainThreadMarker;
+
     /// Placeholder — the real implementation arrives in subsequent tasks.
     pub struct PickerWindowController;
 
@@ -69,6 +80,71 @@ mod macos {
             }
         }
         out
+    }
+
+    /// Convert a packed RGBA byte buffer into a `Retained<NSImage>`.
+    ///
+    /// `rgba` must have exactly `width * height * 4` bytes (row stride is
+    /// `width * 4`). The buffer is borrowed only for the duration of this
+    /// call; Core Graphics copies the pixel data before the function returns.
+    #[allow(dead_code)]
+    pub(super) fn rgba_to_nsimage(
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        _mtm: MainThreadMarker,
+    ) -> Retained<NSImage> {
+        let row_bytes = (width as usize) * 4;
+        debug_assert_eq!(rgba.len(), row_bytes * height as usize);
+
+        // SAFETY: `rgba` is valid for `rgba.len()` bytes. We pass `None` for
+        // the release callback because `CGDataProvider` won't outlive the call
+        // site — the `CGImage` (and hence the provider) is consumed when
+        // `initWithCGImage_size` copies the pixels into NSImage.
+        let provider: CFRetained<CGDataProvider> = unsafe {
+            CGDataProvider::with_data(
+                std::ptr::null_mut(),
+                rgba.as_ptr().cast(),
+                rgba.len(),
+                None,
+            )
+        }
+        .expect("CGDataProvider::with_data returned null");
+
+        let color_space: CFRetained<CGColorSpace> =
+            CGColorSpace::new_device_rgb().expect("CGColorSpace::new_device_rgb returned null");
+
+        // ByteOrderDefault (0) | PremultipliedLast (1) = 1
+        let bitmap_info = CGBitmapInfo(
+            CGImageByteOrderInfo::OrderDefault.0 | CGImageAlphaInfo::PremultipliedLast.0,
+        );
+
+        // SAFETY: `decode` is null (use default), which is explicitly allowed
+        // per the CG API contract.
+        let cg_image: CFRetained<CGImage> = unsafe {
+            CGImage::new(
+                width as usize,
+                height as usize,
+                8,
+                32,
+                row_bytes,
+                Some(&color_space),
+                bitmap_info,
+                Some(&provider),
+                std::ptr::null(),
+                false,
+                CGColorRenderingIntent::RenderingIntentDefault,
+            )
+        }
+        .expect("CGImage::new returned null");
+
+        let size = CGSize {
+            width: width as f64,
+            height: height as f64,
+        };
+
+        // NSImage is AnyThread, so alloc() does not require mtm.
+        NSImage::initWithCGImage_size(NSImage::alloc(), &cg_image, size)
     }
 }
 
