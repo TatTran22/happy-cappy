@@ -116,8 +116,11 @@ use crate::pet::catalog::CatalogEntry;
 /// 3. Per-pet failures in `catalog.load_errors()` order, mapped via
 ///    [`picker_entry_from_load_error`]. `DirRead` errors are dropped.
 pub fn build_picker_entries_base(catalog: &PetCatalog) -> Vec<PickerEntryBase> {
-    let mut out: Vec<PickerEntryBase> =
-        catalog.entries().iter().map(entry_base_from_catalog).collect();
+    let mut out: Vec<PickerEntryBase> = catalog
+        .entries()
+        .iter()
+        .map(entry_base_from_catalog)
+        .collect();
 
     for error in catalog.load_errors() {
         if let Some(entry) = picker_entry_from_load_error(error) {
@@ -191,8 +194,7 @@ mod tests {
 
     #[test]
     fn format_long_serde_message_truncates() {
-        let serde_err =
-            serde_json::from_str::<serde_json::Value>("{not valid").unwrap_err();
+        let serde_err = serde_json::from_str::<serde_json::Value>("{not valid").unwrap_err();
         let error = CatalogLoadError::ManifestParse {
             path: PathBuf::from("/tmp/pets/broken/pet.json"),
             error: ManifestError::Json(serde_err),
@@ -391,7 +393,11 @@ mod tests {
         let multi = entries.iter().find(|e| e.id == "multi").unwrap();
         assert_eq!(
             multi.animations,
-            vec!["blink".to_string(), "idle".to_string(), "walk-right".to_string()]
+            vec![
+                "blink".to_string(),
+                "idle".to_string(),
+                "walk-right".to_string()
+            ]
         );
     }
 }

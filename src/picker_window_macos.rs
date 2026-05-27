@@ -10,9 +10,7 @@ pub struct PickerWindowController;
 
 #[cfg(not(target_os = "macos"))]
 impl PickerWindowController {
-    pub fn new(
-        _proxy: winit::event_loop::EventLoopProxy<crate::app::AppCommand>,
-    ) -> Option<Self> {
+    pub fn new(_proxy: winit::event_loop::EventLoopProxy<crate::app::AppCommand>) -> Option<Self> {
         None
     }
 
@@ -40,21 +38,21 @@ mod macos {
     use objc2::msg_send;
     use objc2::rc::Retained;
     use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
-    use objc2::{sel, ClassType, DefinedClass, MainThreadOnly};
     use objc2::AnyThread;
+    use objc2::{sel, ClassType, DefinedClass, MainThreadOnly};
+    use objc2_app_kit::NSImage;
     use objc2_app_kit::{
         NSBackingStoreType, NSBezelStyle, NSBorderType, NSButton, NSButtonType, NSColor,
         NSControlTextEditingDelegate, NSFloatingWindowLevel, NSFont, NSImageView, NSPanel,
         NSScrollView, NSTableColumn, NSTableView, NSTableViewDataSource, NSTableViewDelegate,
         NSTextField, NSView, NSWindowStyleMask,
     };
-    use objc2_app_kit::NSImage;
     use objc2_core_foundation::CFRetained;
+    use objc2_core_foundation::CGSize;
     use objc2_core_graphics::{
         CGBitmapInfo, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGImage,
         CGImageAlphaInfo, CGImageByteOrderInfo,
     };
-    use objc2_core_foundation::CGSize;
     use objc2_foundation::{
         ns_string, MainThreadMarker, NSIndexSet, NSInteger, NSObject, NSPoint, NSRect, NSSize,
         NSString, NSTimer, NSUInteger,
@@ -497,9 +495,7 @@ mod macos {
                 } else {
                     format!("{}×{}", entry.base.frame_width, entry.base.frame_height)
                 };
-                label.setStringValue(&NSString::from_str(&format!(
-                    "{source} · {dimensions}"
-                )));
+                label.setStringValue(&NSString::from_str(&format!("{source} · {dimensions}")));
             }
             if let Some(label) = ivars.detail_anim.borrow().as_ref() {
                 let text = if entry.base.animations.is_empty() {
@@ -621,10 +617,7 @@ mod macos {
         }
     }
 
-    fn make_row_view_for_index(
-        entries: &[PickerEntry],
-        idx: usize,
-    ) -> Option<Retained<NSView>> {
+    fn make_row_view_for_index(entries: &[PickerEntry], idx: usize) -> Option<Retained<NSView>> {
         let entry = entries.get(idx)?;
         let mtm = MainThreadMarker::new()?;
         Some(make_row_view(entry, mtm))
@@ -693,12 +686,7 @@ mod macos {
         // site — the `CGImage` (and hence the provider) is consumed when
         // `initWithCGImage_size` copies the pixels into NSImage.
         let provider: CFRetained<CGDataProvider> = unsafe {
-            CGDataProvider::with_data(
-                std::ptr::null_mut(),
-                rgba.as_ptr().cast(),
-                rgba.len(),
-                None,
-            )
+            CGDataProvider::with_data(std::ptr::null_mut(), rgba.as_ptr().cast(), rgba.len(), None)
         }
         .expect("CGDataProvider::with_data returned null");
 

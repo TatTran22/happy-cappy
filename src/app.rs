@@ -544,8 +544,7 @@ impl DesktopPetApp {
             return;
         };
         let base = crate::picker_entries::build_picker_entries_base(&self.catalog);
-        let entries =
-            crate::picker_window_macos::attach_preview_frames(base, &self.catalog, mtm);
+        let entries = crate::picker_window_macos::attach_preview_frames(base, &self.catalog, mtm);
         let active_id = self.active_pet_id.clone();
         if let Some(picker) = self.picker.as_ref() {
             picker.sync_entries(entries, &active_id);
@@ -560,9 +559,8 @@ impl DesktopPetApp {
         &mut self,
     ) -> Option<&crate::picker_window_macos::PickerWindowController> {
         if self.picker.is_none() {
-            self.picker = crate::picker_window_macos::PickerWindowController::new(
-                self.event_proxy.clone(),
-            );
+            self.picker =
+                crate::picker_window_macos::PickerWindowController::new(self.event_proxy.clone());
         }
         self.picker.as_ref()
     }
@@ -840,8 +838,7 @@ impl DesktopPetApp {
             return;
         };
         let base = crate::picker_entries::build_picker_entries_base(&self.catalog);
-        let entries =
-            crate::picker_window_macos::attach_preview_frames(base, &self.catalog, mtm);
+        let entries = crate::picker_window_macos::attach_preview_frames(base, &self.catalog, mtm);
         let active_id = self.active_pet_id.clone();
         if let Some(picker) = self.ensure_picker_window() {
             picker.sync_entries(entries, &active_id);
