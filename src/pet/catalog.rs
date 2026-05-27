@@ -317,6 +317,34 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn scan_records_missing_sprite() {
+        let dir = tempdir().unwrap();
+        let pet_dir = dir.path().join("no-sprite");
+        std::fs::create_dir_all(&pet_dir).unwrap();
+        std::fs::write(
+            pet_dir.join("pet.json"),
+            br#"{
+                "id": "no-sprite",
+                "displayName": "No Sprite",
+                "spritesheetPath": "ghost.png",
+                "frame": {"width": 16, "height": 16, "columns": 4, "rows": 1},
+                "animations": {"idle": {"frames": [0]}}
+            }"#,
+        )
+        .unwrap();
+        // Note: ghost.png is intentionally never written.
+
+        let catalog = PetCatalog::scan(test_bundled_pet(), dir.path());
+
+        assert_eq!(catalog.entries().len(), 1);
+        assert_eq!(catalog.load_errors().len(), 1);
+        assert!(matches!(
+            &catalog.load_errors()[0],
+            CatalogLoadError::SpritesheetMissing { .. }
+        ));
+    }
+
     fn write_pet(dir: &Path, id: &str, display_name: &str, sprite_name: &str) {
         std::fs::create_dir_all(dir).unwrap();
         let manifest = format!(
