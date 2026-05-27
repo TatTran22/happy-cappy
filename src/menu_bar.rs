@@ -21,6 +21,7 @@ pub const MENU_TAG_REREQUEST_ACCESSIBILITY: isize = 1109;
 pub const MENU_TAG_AX_STATUS_LABEL: isize = 1110;
 pub const MENU_TAG_PET_SUBMENU: isize = 1200;
 pub const MENU_TAG_REVEAL_PETS_FOLDER: isize = 1201;
+pub const MENU_TAG_OPEN_PET_LIBRARY: isize = 1202;
 // Pet menu items use tag range MENU_TAG_PET_ITEM_BASE..(MENU_TAG_PET_ITEM_BASE + N).
 // The id is carried as the representedObject (string) on the NSMenuItem.
 pub const MENU_TAG_PET_ITEM_BASE: isize = 1300;
@@ -434,6 +435,7 @@ mod tests {
             MENU_TAG_AX_STATUS_LABEL,
             MENU_TAG_REVEAL_PETS_FOLDER,
             MENU_TAG_PET_SUBMENU,
+            MENU_TAG_OPEN_PET_LIBRARY,
         ];
         for (i, a) in used.iter().enumerate() {
             for b in &used[i + 1..] {
