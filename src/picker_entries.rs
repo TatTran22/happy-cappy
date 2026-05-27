@@ -73,6 +73,38 @@ fn truncate_with_ellipsis(input: &str, max_len: usize) -> String {
     out
 }
 
+/// Convert a per-pet catalog failure into a picker entry for display.
+///
+/// Returns `None` for [`CatalogLoadError::DirRead`] (a catalog-wide
+/// failure, not tied to a specific pet directory) — those are still
+/// logged at `warn!` level by the catalog itself.
+pub fn picker_entry_from_load_error(error: &CatalogLoadError) -> Option<PickerEntryBase> {
+    let (folder, source_path) = match error {
+        CatalogLoadError::ManifestParse { path, .. } => folder_and_parent(path)?,
+        CatalogLoadError::SpritesheetMissing { manifest_path, .. } => {
+            folder_and_parent(manifest_path)?
+        }
+        CatalogLoadError::DuplicateId { dropped, .. } => folder_and_parent(dropped)?,
+        CatalogLoadError::DirRead { .. } => return None,
+    };
+    Some(PickerEntryBase {
+        id: folder.clone(),
+        display_name: folder,
+        source: PickerSource::Custom,
+        frame_width: 0,
+        frame_height: 0,
+        animations: Vec::new(),
+        error: Some(format_catalog_error(error)),
+        source_path: Some(source_path),
+    })
+}
+
+fn folder_and_parent(child_path: &std::path::Path) -> Option<(String, PathBuf)> {
+    let parent = child_path.parent()?;
+    let name = parent.file_name()?.to_string_lossy().into_owned();
+    Some((name, parent.to_path_buf()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,5 +164,58 @@ mod tests {
         };
         let msg = format_catalog_error(&error);
         assert!(msg.starts_with("Couldn't read pet directory"));
+    }
+
+    #[test]
+    fn entry_from_manifest_parse_uses_folder_name() {
+        let error = CatalogLoadError::ManifestParse {
+            path: PathBuf::from("/tmp/pets/broken/pet.json"),
+            error: ManifestError::MissingIdleAnimation,
+        };
+        let entry = picker_entry_from_load_error(&error).expect("must produce entry");
+        assert_eq!(entry.display_name, "broken");
+        assert_eq!(entry.source, PickerSource::Custom);
+        assert!(entry.error.is_some());
+        assert_eq!(
+            entry.source_path.as_deref(),
+            Some(std::path::Path::new("/tmp/pets/broken"))
+        );
+        assert_eq!(entry.frame_width, 0);
+        assert_eq!(entry.frame_height, 0);
+        assert!(entry.animations.is_empty());
+    }
+
+    #[test]
+    fn entry_from_spritesheet_missing_uses_folder_name() {
+        let error = CatalogLoadError::SpritesheetMissing {
+            manifest_path: PathBuf::from("/tmp/pets/no-sprite/pet.json"),
+            sprite_path: PathBuf::from("/tmp/pets/no-sprite/ghost.png"),
+        };
+        let entry = picker_entry_from_load_error(&error).expect("must produce entry");
+        assert_eq!(entry.display_name, "no-sprite");
+        assert_eq!(entry.source, PickerSource::Custom);
+        assert!(entry.error.as_deref().unwrap().contains("ghost.png"));
+    }
+
+    #[test]
+    fn entry_from_duplicate_id_uses_dropped_folder_name() {
+        let error = CatalogLoadError::DuplicateId {
+            id: "happy-cappy".to_string(),
+            kept: PathBuf::from("/bundled/h.png"),
+            dropped: PathBuf::from("/tmp/pets/usurper/sprite.png"),
+        };
+        let entry = picker_entry_from_load_error(&error).expect("must produce entry");
+        assert_eq!(entry.display_name, "usurper");
+        assert_eq!(entry.source, PickerSource::Custom);
+        assert!(entry.error.as_deref().unwrap().contains("happy-cappy"));
+    }
+
+    #[test]
+    fn entry_from_dir_read_returns_none() {
+        let error = CatalogLoadError::DirRead {
+            path: PathBuf::from("/tmp/pets"),
+            error: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "no"),
+        };
+        assert!(picker_entry_from_load_error(&error).is_none());
     }
 }
