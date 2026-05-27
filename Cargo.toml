@@ -63,6 +63,9 @@ objc2-application-services = { version = "0.3", features = [
   "HIServices",
 ] }
 
+[dev-dependencies]
+tempfile = "3"
+
 [profile.release]
 opt-level = 3
 lto = "fat"
