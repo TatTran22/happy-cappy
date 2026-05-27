@@ -267,6 +267,56 @@ mod tests {
         );
     }
 
+    #[test]
+    fn scan_records_manifest_parse_error() {
+        let dir = tempdir().unwrap();
+        let pet_dir = dir.path().join("broken");
+        std::fs::create_dir_all(&pet_dir).unwrap();
+        std::fs::write(pet_dir.join("pet.json"), b"{not valid json").unwrap();
+
+        let catalog = PetCatalog::scan(test_bundled_pet(), dir.path());
+
+        assert_eq!(catalog.entries().len(), 1); // bundled only
+        assert_eq!(catalog.load_errors().len(), 1);
+        assert!(matches!(
+            &catalog.load_errors()[0],
+            CatalogLoadError::ManifestParse {
+                error: ManifestError::Json(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn scan_records_missing_idle_animation() {
+        let dir = tempdir().unwrap();
+        let pet_dir = dir.path().join("no-idle");
+        std::fs::create_dir_all(&pet_dir).unwrap();
+        std::fs::write(
+            pet_dir.join("pet.json"),
+            br#"{
+                "id": "no-idle",
+                "displayName": "No Idle",
+                "spritesheetPath": "x.png",
+                "frame": {"width": 16, "height": 16, "columns": 4, "rows": 1},
+                "animations": {"walk": {"frames": [0, 1]}}
+            }"#,
+        )
+        .unwrap();
+
+        let catalog = PetCatalog::scan(test_bundled_pet(), dir.path());
+
+        assert_eq!(catalog.entries().len(), 1);
+        assert_eq!(catalog.load_errors().len(), 1);
+        assert!(matches!(
+            &catalog.load_errors()[0],
+            CatalogLoadError::ManifestParse {
+                error: ManifestError::MissingIdleAnimation,
+                ..
+            }
+        ));
+    }
+
     fn write_pet(dir: &Path, id: &str, display_name: &str, sprite_name: &str) {
         std::fs::create_dir_all(dir).unwrap();
         let manifest = format!(
