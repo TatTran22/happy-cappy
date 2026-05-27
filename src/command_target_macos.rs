@@ -54,6 +54,27 @@ mod macos {
                 }
             }
 
+            #[unsafe(method(activatePet:))]
+            fn activate_pet(&self, sender: Option<&AnyObject>) {
+                let Some(sender) = sender else {
+                    return;
+                };
+                let represented: Option<Retained<AnyObject>> =
+                    unsafe { msg_send![sender, representedObject] };
+                let Some(represented) = represented else {
+                    return;
+                };
+                let cstr: *const std::os::raw::c_char =
+                    unsafe { msg_send![&*represented, UTF8String] };
+                if cstr.is_null() {
+                    return;
+                }
+                let id = unsafe { std::ffi::CStr::from_ptr(cstr) }
+                    .to_string_lossy()
+                    .into_owned();
+                self.send_command(AppCommand::ActivatePet(id));
+            }
+
             #[unsafe(method(dispatchSettingsValue:))]
             fn dispatch_settings_value(&self, sender: Option<&AnyObject>) {
                 let Some(sender) = sender else {
@@ -120,6 +141,10 @@ mod macos {
 
         pub fn settings_value_selector() -> Sel {
             sel!(dispatchSettingsValue:)
+        }
+
+        pub fn activate_pet_selector() -> Sel {
+            sel!(activatePet:)
         }
 
         fn send_command(&self, command: AppCommand) {

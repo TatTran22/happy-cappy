@@ -190,9 +190,7 @@ impl MenuBarController {
         }
 
         menu.addItem(&pet_root_item);
-        unsafe {
-            menu.addItem(&NSMenuItem::separatorItem());
-        }
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
         menu.addItem(&settings_item);
         menu.addItem(&show_hide_item);
         menu.addItem(&focus_mode_item);
@@ -232,10 +230,8 @@ impl MenuBarController {
             return;
         };
 
-        unsafe {
-            while self.pet_submenu.numberOfItems() > 0 {
-                self.pet_submenu.removeItemAtIndex(0);
-            }
+        while self.pet_submenu.numberOfItems() > 0 {
+            self.pet_submenu.removeItemAtIndex(0);
         }
 
         for (i, (id, display_name)) in entries.iter().enumerate() {
@@ -252,8 +248,7 @@ impl MenuBarController {
             unsafe {
                 let id_ns = NSString::from_str(id);
                 let id_obj: &AnyObject = &*id_ns;
-                let id_retained: Retained<AnyObject> = Retained::from(id_obj);
-                let _: () = objc2::msg_send![&*item, setRepresentedObject: &*id_retained];
+                let _: () = objc2::msg_send![&*item, setRepresentedObject: id_obj];
                 item.setTarget(Some(self.target.as_ref()));
                 item.setAction(Some(
                     crate::command_target_macos::CommandTarget::activate_pet_selector(),
@@ -267,10 +262,8 @@ impl MenuBarController {
             self.pet_submenu.addItem(&item);
         }
 
-        unsafe {
-            self.pet_submenu
-                .addItem(&objc2_app_kit::NSMenuItem::separatorItem());
-        }
+        self.pet_submenu
+            .addItem(&NSMenuItem::separatorItem(mtm));
         let reveal_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 NSMenuItem::alloc(mtm),
