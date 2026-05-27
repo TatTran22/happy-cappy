@@ -105,6 +105,7 @@ impl PetCatalog {
                 load_errors,
             };
         }
+        write_readme_if_missing(custom_dir);
 
         let read_dir = match std::fs::read_dir(custom_dir) {
             Ok(rd) => rd,
@@ -176,6 +177,26 @@ impl PetCatalog {
     pub fn load_errors(&self) -> &[CatalogLoadError] {
         &self.load_errors
     }
+}
+
+fn write_readme_if_missing(dir: &Path) {
+    let readme_path = dir.join("README.txt");
+    if readme_path.exists() {
+        return;
+    }
+    let content = "\
+Happy Cappy custom pets
+=======================
+
+Drop a folder here named for your pet (e.g. `my-pet/`). Inside it, place:
+
+  - pet.json         (manifest — see docs/superpowers/specs for the schema)
+  - your-sprite.png  (referenced by `spritesheetPath` in pet.json)
+
+The bundled \"happy-cappy\" pet always wins ID collisions. Invalid
+manifests are skipped and logged; the app never crashes on a bad pet.
+";
+    let _ = std::fs::write(&readme_path, content); // best-effort
 }
 
 fn load_custom_pet(dir: &Path) -> Result<Option<CatalogEntry>, CatalogLoadError> {
@@ -440,6 +461,31 @@ mod tests {
             &catalog.load_errors()[0],
             CatalogLoadError::DuplicateId { id, .. } if id == "twin"
         ));
+    }
+
+    #[test]
+    fn scan_writes_readme_when_missing() {
+        let dir = tempdir().unwrap();
+        let custom_dir = dir.path().join("pets");
+
+        let _catalog = PetCatalog::scan(test_bundled_pet(), &custom_dir);
+
+        let readme = custom_dir.join("README.txt");
+        assert!(readme.exists(), "scan should create README.txt");
+        let content = std::fs::read_to_string(&readme).unwrap();
+        assert!(content.contains("pet.json"), "README should mention pet.json");
+        assert!(!content.is_empty());
+    }
+
+    #[test]
+    fn scan_preserves_existing_readme() {
+        let dir = tempdir().unwrap();
+        let readme = dir.path().join("README.txt");
+        std::fs::write(&readme, b"my custom notes").unwrap();
+
+        let _catalog = PetCatalog::scan(test_bundled_pet(), dir.path());
+
+        assert_eq!(std::fs::read_to_string(&readme).unwrap(), "my custom notes");
     }
 
     #[test]
