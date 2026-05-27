@@ -231,6 +231,15 @@ pub fn default_settings_path() -> Result<PathBuf, SettingsError> {
         .join("settings.json"))
 }
 
+pub fn custom_pets_dir() -> Result<PathBuf, SettingsError> {
+    let home = std::env::var_os("HOME").ok_or(SettingsError::MissingHomeDirectory)?;
+    Ok(PathBuf::from(home)
+        .join("Library")
+        .join("Application Support")
+        .join("Happy Cappy")
+        .join("pets"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,6 +301,24 @@ mod tests {
         assert_eq!(loaded.active_pet_id, None);
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn custom_pets_dir_lives_under_happy_cappy_app_support() {
+        // Force a known HOME so the test is hermetic.
+        let original_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", "/tmp/fake-home");
+
+        let result = custom_pets_dir();
+
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+
+        let path = result.unwrap();
+        assert!(path.ends_with("Library/Application Support/Happy Cappy/pets"));
     }
 
     #[test]
