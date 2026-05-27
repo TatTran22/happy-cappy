@@ -532,6 +532,7 @@ impl DesktopPetApp {
 
         let new_runtime = PetRuntime::new_with_manifest(entry.manifest.clone());
         let new_frame_size = new_runtime.frame_size();
+        let frame_size_changed = self.pet.frame_size() != new_frame_size;
 
         self.pet = new_runtime;
         self.sprite_sheet = Some(new_sprite);
@@ -544,8 +545,21 @@ impl DesktopPetApp {
             }
         }
 
-        if let Some(window) = &self.window {
-            let _ = window.request_inner_size(inner_size_for(new_frame_size, WINDOW_SCALE));
+        if let Some(window) = self.window.clone() {
+            if frame_size_changed {
+                let _ = window.request_inner_size(inner_size_for(new_frame_size, WINDOW_SCALE));
+                let surface = window.inner_size();
+                match PetRenderer::new(
+                    Arc::clone(&window),
+                    surface.width,
+                    surface.height,
+                    new_frame_size.0,
+                    new_frame_size.1,
+                ) {
+                    Ok(renderer) => self.renderer = Some(renderer),
+                    Err(error) => warn!("failed to rebuild renderer after pet swap: {error}"),
+                }
+            }
             window.request_redraw();
         }
 
