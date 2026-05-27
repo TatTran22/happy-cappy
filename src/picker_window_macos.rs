@@ -57,7 +57,7 @@ mod macos {
     use objc2_core_foundation::CGSize;
     use objc2_foundation::{
         ns_string, MainThreadMarker, NSIndexSet, NSInteger, NSObject, NSPoint, NSRect, NSSize,
-        NSString, NSUInteger,
+        NSString, NSTimer, NSUInteger,
     };
 
     const PANEL_WIDTH: f64 = 480.0;
@@ -71,6 +71,7 @@ mod macos {
     pub struct PickerWindowController {
         panel: Retained<NSPanel>,
         source: Retained<PickerTableSource>,
+        timer: std::cell::RefCell<Option<Retained<NSTimer>>>,
     }
 
     impl PickerWindowController {
@@ -225,18 +226,46 @@ mod macos {
 
             panel.center();
 
-            Some(Self { panel, source })
+            Some(Self {
+                panel,
+                source,
+                timer: std::cell::RefCell::new(None),
+            })
         }
 
         pub fn show(&self) {
             self.panel.makeKeyAndOrderFront(None);
             self.panel.orderFrontRegardless();
-            // Animation timer start arrives in Task 17.
+            self.start_animation_timer();
         }
 
         pub fn hide(&self) {
+            self.stop_animation_timer();
             self.panel.orderOut(None);
-            // Animation timer stop arrives in Task 17.
+        }
+
+        fn start_animation_timer(&self) {
+            if self.timer.borrow().is_some() {
+                return;
+            }
+            let interval = 0.1_f64; // 10 fps
+            let target_obj: &AnyObject = self.source.as_ref();
+            let timer: Retained<NSTimer> = unsafe {
+                NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
+                    interval,
+                    target_obj,
+                    PickerTableSource::tick_selector(),
+                    None,
+                    true,
+                )
+            };
+            *self.timer.borrow_mut() = Some(timer);
+        }
+
+        fn stop_animation_timer(&self) {
+            if let Some(timer) = self.timer.borrow_mut().take() {
+                timer.invalidate();
+            }
         }
 
         pub fn is_visible(&self) -> bool {
