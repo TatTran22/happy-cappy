@@ -6,6 +6,7 @@ pub mod menu_bar;
 pub mod micro_action;
 pub mod pet;
 pub mod physics;
+pub mod picker_entries;
 pub mod renderer;
 pub mod settings;
 pub mod settings_window_macos;
