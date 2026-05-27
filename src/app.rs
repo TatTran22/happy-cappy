@@ -508,6 +508,7 @@ impl DesktopPetApp {
     pub fn refresh_catalog(&mut self) {
         let (catalog, _) = build_startup_catalog();
         self.catalog = catalog;
+        self.sync_pet_submenu();
     }
 
     pub fn activate_pet(&mut self, id: &str) -> Result<(), ActivationError> {
@@ -547,6 +548,7 @@ impl DesktopPetApp {
             window.request_redraw();
         }
 
+        self.sync_pet_submenu();
         Ok(())
     }
 
@@ -799,6 +801,20 @@ impl DesktopPetApp {
         if let Some(menu_bar) = &self.menu_bar {
             menu_bar.sync_runtime_state(self.pet_visible, self.settings.focus_mode);
         }
+        self.sync_pet_submenu();
+    }
+
+    fn sync_pet_submenu(&self) {
+        let Some(menu_bar) = &self.menu_bar else {
+            return;
+        };
+        let entries: Vec<(String, String)> = self
+            .catalog
+            .entries()
+            .iter()
+            .map(|e| (e.id.clone(), e.display_name.clone()))
+            .collect();
+        menu_bar.populate_pet_submenu(&entries, &self.active_pet_id);
     }
 
     fn show_context_menu(&self, local_position: Option<Vec2>) {
