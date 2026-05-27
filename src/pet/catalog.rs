@@ -124,7 +124,9 @@ impl PetCatalog {
         let mut sub_entries: Vec<CatalogEntry> = Vec::new();
         for entry in read_dir {
             let Ok(entry) = entry else { continue };
-            let Ok(file_type) = entry.file_type() else { continue };
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
             if !file_type.is_dir() {
                 continue;
             }
@@ -231,8 +233,8 @@ fn load_custom_pet(dir: &Path) -> Result<Option<CatalogEntry>, CatalogLoadError>
 
 #[cfg(test)]
 fn test_bundled_pet() -> BundledPet {
-    use std::collections::BTreeMap;
     use crate::pet::manifest::{Animation, FrameGeometry};
+    use std::collections::BTreeMap;
     let mut animations = BTreeMap::new();
     animations.insert(
         "idle".to_string(),
@@ -473,7 +475,10 @@ mod tests {
         let readme = custom_dir.join("README.txt");
         assert!(readme.exists(), "scan should create README.txt");
         let content = std::fs::read_to_string(&readme).unwrap();
-        assert!(content.contains("pet.json"), "README should mention pet.json");
+        assert!(
+            content.contains("pet.json"),
+            "README should mention pet.json"
+        );
         assert!(!content.is_empty());
     }
 
@@ -521,7 +526,10 @@ mod tests {
         let catalog = PetCatalog::scan(test_bundled_pet(), dir.path());
 
         let nested = catalog.lookup("nested").unwrap();
-        assert_eq!(nested.spritesheet_path, pet_dir.join("art").join("sprite.png"));
+        assert_eq!(
+            nested.spritesheet_path,
+            pet_dir.join("art").join("sprite.png")
+        );
     }
 
     #[test]

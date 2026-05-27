@@ -478,13 +478,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("pet.json");
         let mut f = std::fs::File::create(&path).unwrap();
-        f.write_all(br#"{
+        f.write_all(
+            br#"{
             "id": "test",
             "displayName": "Test",
             "spritesheetPath": "x.png",
             "frame": {"width": 16, "height": 16, "columns": 4, "rows": 1},
             "animations": {"idle": {"frames": [0, 1, 2, 3]}}
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
         drop(f);
 
         let manifest = PetManifest::from_path(&path).unwrap();

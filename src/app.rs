@@ -104,8 +104,8 @@ fn build_startup_catalog() -> (PetCatalog, PathBuf) {
         spritesheet_path: bundled_sprite,
     };
 
-    let custom_dir = custom_pets_dir()
-        .unwrap_or_else(|_| PathBuf::from("/tmp/happy-cappy-pets-fallback"));
+    let custom_dir =
+        custom_pets_dir().unwrap_or_else(|_| PathBuf::from("/tmp/happy-cappy-pets-fallback"));
 
     let catalog = PetCatalog::scan(bundled, &custom_dir);
 
@@ -1553,16 +1553,27 @@ mod tests {
                 id: "happy-cappy".to_string(),
                 display_name: "Happy Cappy".to_string(),
                 spritesheet_path: "x.png".to_string(),
-                frame: FrameGeometry { width: 16, height: 16, columns: 4, rows: 1 },
+                frame: FrameGeometry {
+                    width: 16,
+                    height: 16,
+                    columns: 4,
+                    rows: 1,
+                },
                 animations,
             },
             spritesheet_path: PathBuf::from("/bundled/x.png"),
         };
         let catalog = PetCatalog::scan(bundled, tmp.path());
 
-        assert_eq!(resolve_active_pet_id(&catalog, Some("ghost")), "happy-cappy");
+        assert_eq!(
+            resolve_active_pet_id(&catalog, Some("ghost")),
+            "happy-cappy"
+        );
         assert_eq!(resolve_active_pet_id(&catalog, None), "happy-cappy");
-        assert_eq!(resolve_active_pet_id(&catalog, Some("happy-cappy")), "happy-cappy");
+        assert_eq!(
+            resolve_active_pet_id(&catalog, Some("happy-cappy")),
+            "happy-cappy"
+        );
     }
 
     #[test]
@@ -1644,8 +1655,8 @@ mod tests {
         // will be the real ~/Library path which we can't write to in tests,
         // so we just sanity-check that the count stays at >= 1 (bundled).
         app.refresh_catalog();
-        assert!(app.catalog.entries().len() >= 1);
-        assert!(app.catalog.entries().len() >= initial_entry_count.saturating_sub(0));
+        assert!(!app.catalog.entries().is_empty());
+        assert!(app.catalog.entries().len() >= initial_entry_count);
     }
 }
 

@@ -283,10 +283,8 @@ mod tests {
 
     #[test]
     fn settings_deserializes_legacy_file_without_active_pet_id() {
-        let root = std::env::temp_dir().join(format!(
-            "happy-cappy-legacy-active-{}",
-            fastrand::u64(..)
-        ));
+        let root =
+            std::env::temp_dir().join(format!("happy-cappy-legacy-active-{}", fastrand::u64(..)));
         fs::create_dir_all(&root).unwrap();
         let path = root.join("settings.json");
         fs::write(
@@ -323,7 +321,8 @@ mod tests {
 
     #[test]
     fn settings_roundtrip_with_active_pet_id() {
-        let root = std::env::temp_dir().join(format!("happy-cappy-active-rt-{}", fastrand::u64(..)));
+        let root =
+            std::env::temp_dir().join(format!("happy-cappy-active-rt-{}", fastrand::u64(..)));
         let path = root.join("settings.json");
         let settings = AppSettings {
             active_pet_id: Some("shiba".to_string()),

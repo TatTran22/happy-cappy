@@ -62,12 +62,7 @@ impl MenuBarController {
 
     pub fn sync_runtime_state(&self, _pet_visible: bool, _focus_mode: bool) {}
 
-    pub fn populate_pet_submenu(
-        &self,
-        _entries: &[(String, String)],
-        _active_id: &str,
-    ) {
-    }
+    pub fn populate_pet_submenu(&self, _entries: &[(String, String)], _active_id: &str) {}
 }
 
 #[cfg(target_os = "macos")]
@@ -256,7 +251,7 @@ impl MenuBarController {
             item.setTag(MENU_TAG_PET_ITEM_BASE + i as isize);
             unsafe {
                 let id_ns = NSString::from_str(id);
-                let id_obj: &AnyObject = &*id_ns;
+                let id_obj: &AnyObject = &id_ns;
                 let _: () = objc2::msg_send![&*item, setRepresentedObject: id_obj];
                 item.setTarget(Some(self.target.as_ref()));
                 item.setAction(Some(
@@ -271,8 +266,7 @@ impl MenuBarController {
             self.pet_submenu.addItem(&item);
         }
 
-        self.pet_submenu
-            .addItem(&NSMenuItem::separatorItem(mtm));
+        self.pet_submenu.addItem(&NSMenuItem::separatorItem(mtm));
         let reveal_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 NSMenuItem::alloc(mtm),
