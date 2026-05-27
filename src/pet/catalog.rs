@@ -120,6 +120,7 @@ impl PetCatalog {
             }
         };
 
+        let mut sub_entries: Vec<CatalogEntry> = Vec::new();
         for entry in read_dir {
             let Ok(entry) = entry else { continue };
             let Ok(file_type) = entry.file_type() else { continue };
@@ -127,10 +128,35 @@ impl PetCatalog {
                 continue;
             }
             match load_custom_pet(&entry.path()) {
-                Ok(Some(catalog_entry)) => entries.push(catalog_entry),
+                Ok(Some(catalog_entry)) => sub_entries.push(catalog_entry),
                 Ok(None) => {}
                 Err(err) => load_errors.push(err),
             }
+        }
+
+        sub_entries.sort_by(|a, b| {
+            a.display_name
+                .to_lowercase()
+                .cmp(&b.display_name.to_lowercase())
+        });
+
+        let mut ids: HashSet<String> = entries.iter().map(|e| e.id.clone()).collect();
+        for entry in sub_entries {
+            if ids.contains(&entry.id) {
+                let kept = entries
+                    .iter()
+                    .find(|e| e.id == entry.id)
+                    .map(|e| e.spritesheet_path.clone())
+                    .unwrap_or_default();
+                load_errors.push(CatalogLoadError::DuplicateId {
+                    id: entry.id.clone(),
+                    kept,
+                    dropped: entry.spritesheet_path.clone(),
+                });
+                continue;
+            }
+            ids.insert(entry.id.clone());
+            entries.push(entry);
         }
 
         Self {
@@ -373,6 +399,47 @@ mod tests {
             catalog.load_errors().is_empty(),
             "missing pet.json must NOT be an error"
         );
+    }
+
+    #[test]
+    fn scan_drops_duplicate_id_keeping_bundled() {
+        let dir = tempdir().unwrap();
+        write_pet(
+            &dir.path().join("custom-cappy"),
+            "happy-cappy",
+            "Custom Cappy",
+            "sprite.png",
+        );
+
+        let catalog = PetCatalog::scan(test_bundled_pet(), dir.path());
+
+        assert_eq!(catalog.entries().len(), 1);
+        assert_eq!(catalog.entries()[0].source, CatalogSource::Bundled);
+        assert_eq!(catalog.load_errors().len(), 1);
+        assert!(matches!(
+            &catalog.load_errors()[0],
+            CatalogLoadError::DuplicateId { id, .. } if id == "happy-cappy"
+        ));
+    }
+
+    #[test]
+    fn scan_drops_duplicate_id_between_two_customs() {
+        let dir = tempdir().unwrap();
+        // Both have id "twin"; "alpha" sorts first by display name and wins.
+        write_pet(&dir.path().join("a"), "twin", "Alpha", "a.png");
+        write_pet(&dir.path().join("b"), "twin", "Beta", "b.png");
+
+        let catalog = PetCatalog::scan(test_bundled_pet(), dir.path());
+
+        // bundled + 1 custom kept = 2
+        assert_eq!(catalog.entries().len(), 2);
+        let twin = catalog.lookup("twin").unwrap();
+        assert_eq!(twin.display_name, "Alpha");
+        assert_eq!(catalog.load_errors().len(), 1);
+        assert!(matches!(
+            &catalog.load_errors()[0],
+            CatalogLoadError::DuplicateId { id, .. } if id == "twin"
+        ));
     }
 
     #[test]
