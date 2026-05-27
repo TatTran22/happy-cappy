@@ -226,6 +226,8 @@ mod macos {
 
             panel.center();
 
+            *source.ivars().panel.borrow_mut() = Some(panel.clone());
+
             Some(Self {
                 panel,
                 source,
@@ -327,6 +329,7 @@ mod macos {
         pub active_id: RefCell<String>,
         pub selected_index: RefCell<Option<usize>>,
         pub frame_counter: RefCell<usize>,
+        pub panel: RefCell<Option<Retained<NSPanel>>>,
         pub table_view: RefCell<Option<Retained<NSTableView>>>,
         pub detail_image: RefCell<Option<Retained<NSImageView>>>,
         pub detail_name: RefCell<Option<Retained<NSTextField>>>,
@@ -411,6 +414,9 @@ mod macos {
                     .ivars()
                     .proxy
                     .send_event(AppCommand::ActivatePet(entry.base.id.clone()));
+                if let Some(panel) = self.ivars().panel.borrow().clone() {
+                    panel.orderOut(None);
+                }
             }
 
             #[unsafe(method(onRevealClicked:))]
@@ -435,6 +441,7 @@ mod macos {
                 active_id: RefCell::new(String::new()),
                 selected_index: RefCell::new(None),
                 frame_counter: RefCell::new(0),
+                panel: RefCell::new(None),
                 table_view: RefCell::new(None),
                 detail_image: RefCell::new(None),
                 detail_name: RefCell::new(None),
