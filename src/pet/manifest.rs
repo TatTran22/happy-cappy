@@ -137,6 +137,22 @@ pub enum ManifestError {
     MissingRequiredAnimation {
         name: &'static str,
     },
+    LoopStartOutOfBounds {
+        animation: String,
+        loop_start: usize,
+        frames: usize,
+    },
+    UnresolvedFallback {
+        animation: String,
+        fallback: String,
+    },
+    ZeroFrameDuration {
+        animation: String,
+        frame_pos: usize,
+    },
+    OneShotWithLoopStart {
+        animation: String,
+    },
 }
 
 impl fmt::Display for ManifestError {
@@ -168,6 +184,22 @@ impl fmt::Display for ManifestError {
             Self::MissingRequiredAnimation { name } => {
                 write!(f, "manifest is missing required animation '{name}'")
             }
+            Self::LoopStartOutOfBounds { animation, loop_start, frames } => write!(
+                f,
+                "animation '{animation}' loopStart {loop_start} >= frame count {frames}"
+            ),
+            Self::UnresolvedFallback { animation, fallback } => write!(
+                f,
+                "animation '{animation}' fallback '{fallback}' is not a defined animation"
+            ),
+            Self::ZeroFrameDuration { animation, frame_pos } => write!(
+                f,
+                "animation '{animation}' frame[{frame_pos}] has ms = 0"
+            ),
+            Self::OneShotWithLoopStart { animation } => write!(
+                f,
+                "animation '{animation}' sets both oneShot and loopStart (mutually exclusive)"
+            ),
         }
     }
 }
@@ -288,10 +320,43 @@ impl PetManifest {
                     });
                 }
             }
+            for (pos, frame) in anim.frames.iter().enumerate() {
+                if matches!(frame.ms, Some(0)) {
+                    return Err(ManifestError::ZeroFrameDuration {
+                        animation: name.clone(),
+                        frame_pos: pos,
+                    });
+                }
+            }
+            if anim.one_shot && anim.loop_start.is_some() {
+                return Err(ManifestError::OneShotWithLoopStart {
+                    animation: name.clone(),
+                });
+            }
+            if let Some(loop_start) = anim.loop_start {
+                if loop_start >= anim.frames.len() {
+                    return Err(ManifestError::LoopStartOutOfBounds {
+                        animation: name.clone(),
+                        loop_start,
+                        frames: anim.frames.len(),
+                    });
+                }
+            }
         }
 
         if !self.animations.contains_key("idle") {
             return Err(ManifestError::MissingIdleAnimation);
+        }
+
+        for (name, anim) in &self.animations {
+            if let Some(fallback) = &anim.fallback {
+                if fallback != "idle" && !self.animations.contains_key(fallback.as_str()) {
+                    return Err(ManifestError::UnresolvedFallback {
+                        animation: name.clone(),
+                        fallback: fallback.clone(),
+                    });
+                }
+            }
         }
 
         Ok(())
@@ -326,6 +391,14 @@ mod tests {
             manifest.animations["drag"].frames.iter().map(|f| f.index).collect::<Vec<_>>(),
             vec![36, 37, 38, 39]
         );
+    }
+
+    fn manifest_json(animations: &str) -> String {
+        format!(
+            r#"{{ "id": "x", "displayName": "X", "spritesheetPath": "x.png",
+              "frame": {{ "width": 16, "height": 16, "columns": 4, "rows": 1 }},
+              "animations": {{ {animations} }} }}"#
+        )
     }
 
     fn minimal_valid_json() -> String {
@@ -629,5 +702,47 @@ mod tests {
         let f = Frame::from(5u32);
         assert_eq!(f.index, 5);
         assert_eq!(f.ms, None);
+    }
+
+    #[test]
+    fn rejects_loop_start_out_of_bounds() {
+        let json = manifest_json(r#""idle": { "frames": [0, 1], "loopStart": 5 }"#);
+        let err = PetManifest::from_json_str(&json).unwrap_err();
+        assert!(matches!(err, ManifestError::LoopStartOutOfBounds { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn rejects_unresolved_fallback() {
+        let json = manifest_json(r#""idle": { "frames": [0], "fallback": "nope" }"#);
+        let err = PetManifest::from_json_str(&json).unwrap_err();
+        assert!(matches!(err, ManifestError::UnresolvedFallback { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn accepts_fallback_idle_even_if_only_idle_defined() {
+        let json = manifest_json(r#""idle": { "frames": [0], "fallback": "idle" }"#);
+        assert!(PetManifest::from_json_str(&json).is_ok());
+    }
+
+    #[test]
+    fn rejects_zero_frame_duration() {
+        let json = manifest_json(r#""idle": { "frames": [{ "index": 0, "ms": 0 }] }"#);
+        let err = PetManifest::from_json_str(&json).unwrap_err();
+        assert!(matches!(err, ManifestError::ZeroFrameDuration { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn rejects_one_shot_with_loop_start() {
+        let json = manifest_json(r#""idle": { "frames": [0, 1], "oneShot": true, "loopStart": 1 }"#);
+        let err = PetManifest::from_json_str(&json).unwrap_err();
+        assert!(matches!(err, ManifestError::OneShotWithLoopStart { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn accepts_v2_fields_on_manifest_version_1() {
+        let json = manifest_json(
+            r#""idle": { "frames": [{ "index": 0, "ms": 80 }, { "index": 1, "ms": 80 }], "loopStart": 1 }"#,
+        );
+        assert!(PetManifest::from_json_str(&json).is_ok());
     }
 }
