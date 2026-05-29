@@ -113,9 +113,55 @@ pub fn parse_notify_line(line: &str) -> Result<NotificationEvent, NotifyParseErr
     Ok(ev)
 }
 
+#[derive(clap::Parser, Debug)]
+#[command(name = "happy-cappy", about = "Happy Cappy desktop companion")]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum Command {
+    /// Send a notification to the running pet over its control socket.
+    Notify(NotifyArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct NotifyArgs {
+    /// Event kind, e.g. running | succeeded | failed | needs-review | message (open string).
+    #[arg(long)]
+    pub kind: String,
+    /// Explicit animation name override (else `notify-<kind>`).
+    #[arg(long)]
+    pub animation: Option<String>,
+    #[arg(long)]
+    pub label: Option<String>,
+    #[arg(long)]
+    pub body: Option<String>,
+    /// Time-to-live in seconds (converted to ms).
+    #[arg(long)]
+    pub ttl: Option<u64>,
+    #[arg(long)]
+    pub priority: Option<i32>,
+}
+
+impl NotifyArgs {
+    pub fn to_event(&self) -> NotificationEvent {
+        NotificationEvent {
+            kind: self.kind.clone(),
+            animation_name: self.animation.clone(),
+            label: self.label.clone(),
+            body: self.body.clone(),
+            ttl_ms: self.ttl.map(|s| s.saturating_mul(1000)),
+            priority: self.priority,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
 
     #[test]
     fn parses_minimal_event() {
@@ -208,5 +254,45 @@ mod tests {
         assert_eq!(clamp_priority(999), PRIORITY_MAX);
         assert_eq!(clamp_ttl(0), TTL_MIN_MS);
         assert_eq!(clamp_ttl(u64::MAX), TTL_MAX_MS);
+    }
+
+    #[test]
+    fn cli_parses_notify_with_kind() {
+        let cli = Cli::try_parse_from(["happy-cappy", "notify", "--kind", "running"]).unwrap();
+        let Some(Command::Notify(args)) = cli.command else {
+            panic!("expected notify")
+        };
+        assert_eq!(args.kind, "running");
+        let ev = args.to_event();
+        assert_eq!(ev.kind, "running");
+        assert_eq!(ev.ttl_ms, None);
+    }
+
+    #[test]
+    fn cli_notify_converts_ttl_seconds_to_ms() {
+        let cli = Cli::try_parse_from(["happy-cappy", "notify", "--kind", "failed", "--ttl", "30"])
+            .unwrap();
+        let Some(Command::Notify(args)) = cli.command else {
+            panic!()
+        };
+        assert_eq!(args.to_event().ttl_ms, Some(30_000));
+    }
+
+    #[test]
+    fn cli_no_subcommand_is_none() {
+        let cli = Cli::try_parse_from(["happy-cappy"]).unwrap();
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn cli_notify_requires_kind() {
+        assert!(Cli::try_parse_from(["happy-cappy", "notify"]).is_err());
+    }
+
+    #[test]
+    fn cli_notify_rejects_nonnumeric_ttl() {
+        assert!(
+            Cli::try_parse_from(["happy-cappy", "notify", "--kind", "x", "--ttl", "soon"]).is_err()
+        );
     }
 }

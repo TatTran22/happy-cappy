@@ -6,6 +6,7 @@ description = "Happy Cappy, a native macOS capybara desktop companion."
 license = "UNLICENSED"
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
 env_logger = "0.11"
 fastrand = "2"
 image = { version = "0.25", default-features = false, features = ["png"] }
