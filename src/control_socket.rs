@@ -52,9 +52,15 @@ pub fn bind_control_socket(path: &Path) -> BindOutcome {
 
 /// Read + parse a single bounded event line from a connection.
 pub fn read_event(stream: UnixStream) -> Result<NotificationEvent, Box<dyn std::error::Error>> {
-    let mut reader = BufReader::new(stream).take(MAX_LINE_BYTES as u64 + 1);
+    let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    reader.read_line(&mut line)?;
+    let n = reader
+        .by_ref()
+        .take(MAX_LINE_BYTES as u64 + 1)
+        .read_line(&mut line)?;
+    if n > MAX_LINE_BYTES {
+        return Err(Box::new(crate::notification::NotifyParseError::TooLong));
+    }
     Ok(parse_notify_line(line.trim_end())?)
 }
 
@@ -107,6 +113,28 @@ mod tests {
             BindOutcome::Bound(_) => {}
             other => panic!("expected Bound after stale cleanup, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn read_event_rejects_overlong_padded_line() {
+        use std::io::Write;
+        use std::os::unix::net::UnixStream;
+        let (mut writer, reader) = UnixStream::pair().unwrap();
+        // Short valid JSON padded well past MAX_LINE_BYTES with trailing spaces + newline.
+        let payload = format!(
+            "{}{}\n",
+            r#"{"kind":"running"}"#,
+            " ".repeat(MAX_LINE_BYTES)
+        );
+        // Write on a thread (payload exceeds the socket buffer and would block).
+        let h = std::thread::spawn(move || {
+            let _ = writer.write_all(payload.as_bytes());
+        });
+        assert!(
+            read_event(reader).is_err(),
+            "overlong line must be rejected, not silently truncated+accepted"
+        );
+        let _ = h.join();
     }
 
     #[test]
