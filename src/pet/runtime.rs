@@ -274,6 +274,9 @@ impl PetRuntime {
         let frame_count = self.current_animation().frame_count().max(1);
         loop {
             let frame_duration = self.frame_duration_for(self.frame_index);
+            if frame_duration.is_zero() {
+                break; // ms:0 is rejected by manifest validation; guard against test-injected/raw frames
+            }
             if self.frame_elapsed < frame_duration {
                 break;
             }
@@ -505,7 +508,6 @@ impl PetRuntime {
     }
 
     #[cfg(test)]
-    #[allow(dead_code)] // used by a later task
     pub fn replace_animation_for_test(&mut self, name: &str, animation: crate::pet::manifest::Animation) {
         self.manifest.animations.insert(name.to_string(), animation);
     }
@@ -1085,5 +1087,27 @@ mod tests {
         assert_eq!(pet.frame_index(), 1);
         pet.tick(Duration::from_millis(50));
         assert_eq!(pet.frame_index(), 0); // wrapped (2 frames)
+    }
+
+    #[test]
+    fn zero_frame_duration_does_not_hang_advance_animation() {
+        use crate::pet::manifest::{Animation, Frame};
+        // Manifest validation rejects ms:0, but replace_animation_for_test bypasses
+        // it. The guard in advance_animation must break instead of spinning forever.
+        let mut pet = lifecycle_fixture("idle", Animation::from_indices(&[0, 1, 2, 3]));
+        pet.replace_animation_for_test(
+            "zero",
+            Animation {
+                frames: vec![Frame { index: 0, ms: Some(0) }],
+                loop_start: None,
+                fallback: None,
+                one_shot: false,
+            },
+        );
+        pet.set_current_animation_for_test("zero");
+
+        // If the guard were missing this would loop forever; reaching the asserts proves it returns.
+        pet.tick(Duration::from_millis(100));
+        assert_eq!(pet.frame_index(), 0);
     }
 }
