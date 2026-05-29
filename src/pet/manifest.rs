@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 const MAX_FRAMES_PER_ANIMATION: usize = 64;
 
@@ -26,9 +26,86 @@ pub struct FrameGeometry {
     pub rows: u32,
 }
 
+/// One animation frame: a sprite index plus an optional per-frame duration.
+/// Deserializes from either a bare integer (v1: `7`) or an object (v2: `{ "index": 7, "ms": 120 }`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Frame {
+    pub index: u32,
+    /// `None` -> the runtime uses its state/personality-derived duration (v1 parity).
+    pub ms: Option<u32>,
+}
+
+impl From<u32> for Frame {
+    fn from(index: u32) -> Self {
+        Frame { index, ms: None }
+    }
+}
+
+impl<'de> Deserialize<'de> for Frame {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Index(u32),
+            Object {
+                index: u32,
+                #[serde(default)]
+                ms: Option<u32>,
+            },
+        }
+        Ok(match Raw::deserialize(deserializer)? {
+            Raw::Index(index) => Frame { index, ms: None },
+            Raw::Object { index, ms } => Frame { index, ms },
+        })
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Animation {
-    pub frames: Vec<u32>,
+    pub frames: Vec<Frame>,
+    #[serde(default)]
+    pub loop_start: Option<usize>,
+    #[serde(default)]
+    pub fallback: Option<String>,
+    #[serde(default)]
+    pub one_shot: bool,
+}
+
+impl Animation {
+    /// Build a plain v1-style animation (no per-frame ms, no lifecycle fields). For tests/fixtures.
+    pub fn from_indices(indices: &[u32]) -> Self {
+        Animation {
+            frames: indices.iter().copied().map(Frame::from).collect(),
+            loop_start: None,
+            fallback: None,
+            one_shot: false,
+        }
+    }
+
+    pub fn frame_count(&self) -> usize {
+        self.frames.len()
+    }
+
+    /// Sprite index at `pos` (wraps defensively so it never panics).
+    pub fn sprite_index(&self, pos: usize) -> u32 {
+        let len = self.frames.len().max(1);
+        self.frames[pos % len].index
+    }
+
+    /// Per-frame duration override at `pos`, if the manifest specified one.
+    pub fn frame_ms(&self, pos: usize) -> Option<u32> {
+        let len = self.frames.len().max(1);
+        self.frames.get(pos % len).and_then(|f| f.ms)
+    }
+
+    /// A "lifecycle" animation drives its own cursor (intro/one-shot) and must start at frame 0 on entry.
+    pub fn is_lifecycle(&self) -> bool {
+        self.one_shot || self.loop_start.is_some()
+    }
 }
 
 fn default_manifest_version() -> u32 {
@@ -59,6 +136,22 @@ pub enum ManifestError {
     MissingIdleAnimation,
     MissingRequiredAnimation {
         name: &'static str,
+    },
+    LoopStartOutOfBounds {
+        animation: String,
+        loop_start: usize,
+        frames: usize,
+    },
+    UnresolvedFallback {
+        animation: String,
+        fallback: String,
+    },
+    ZeroFrameDuration {
+        animation: String,
+        frame_pos: usize,
+    },
+    OneShotWithLoopStart {
+        animation: String,
     },
 }
 
@@ -91,6 +184,29 @@ impl fmt::Display for ManifestError {
             Self::MissingRequiredAnimation { name } => {
                 write!(f, "manifest is missing required animation '{name}'")
             }
+            Self::LoopStartOutOfBounds {
+                animation,
+                loop_start,
+                frames,
+            } => write!(
+                f,
+                "animation '{animation}' loopStart {loop_start} >= frame count {frames}"
+            ),
+            Self::UnresolvedFallback {
+                animation,
+                fallback,
+            } => write!(
+                f,
+                "animation '{animation}' fallback '{fallback}' is not a defined animation"
+            ),
+            Self::ZeroFrameDuration {
+                animation,
+                frame_pos,
+            } => write!(f, "animation '{animation}' frame[{frame_pos}] has ms = 0"),
+            Self::OneShotWithLoopStart { animation } => write!(
+                f,
+                "animation '{animation}' sets both oneShot and loopStart (mutually exclusive)"
+            ),
         }
     }
 }
@@ -201,13 +317,35 @@ impl PetManifest {
                     count: anim.frames.len(),
                 });
             }
-            for (pos, index) in anim.frames.iter().enumerate() {
-                if *index >= max_index {
+            for (pos, frame) in anim.frames.iter().enumerate() {
+                if frame.index >= max_index {
                     return Err(ManifestError::SpriteIndexOutOfBounds {
                         animation: name.clone(),
                         frame_pos: pos,
-                        index: *index,
+                        index: frame.index,
                         max: max_index,
+                    });
+                }
+            }
+            for (pos, frame) in anim.frames.iter().enumerate() {
+                if matches!(frame.ms, Some(0)) {
+                    return Err(ManifestError::ZeroFrameDuration {
+                        animation: name.clone(),
+                        frame_pos: pos,
+                    });
+                }
+            }
+            if anim.one_shot && anim.loop_start.is_some() {
+                return Err(ManifestError::OneShotWithLoopStart {
+                    animation: name.clone(),
+                });
+            }
+            if let Some(loop_start) = anim.loop_start {
+                if loop_start >= anim.frames.len() {
+                    return Err(ManifestError::LoopStartOutOfBounds {
+                        animation: name.clone(),
+                        loop_start,
+                        frames: anim.frames.len(),
                     });
                 }
             }
@@ -215,6 +353,17 @@ impl PetManifest {
 
         if !self.animations.contains_key("idle") {
             return Err(ManifestError::MissingIdleAnimation);
+        }
+
+        for (name, anim) in &self.animations {
+            if let Some(fallback) = &anim.fallback {
+                if fallback != "idle" && !self.animations.contains_key(fallback.as_str()) {
+                    return Err(ManifestError::UnresolvedFallback {
+                        animation: name.clone(),
+                        fallback: fallback.clone(),
+                    });
+                }
+            }
         }
 
         Ok(())
@@ -236,13 +385,39 @@ mod tests {
         assert_eq!(manifest.frame.columns, 4);
         assert_eq!(manifest.frame.rows, 10);
         assert_eq!(manifest.manifest_version, 1);
-        assert_eq!(manifest.animations.len(), 10);
-        assert_eq!(manifest.animations["idle"].frames, vec![0, 1, 2, 3]);
+        assert_eq!(manifest.animations.len(), 15);
         assert_eq!(
-            manifest.animations["walk-right"].frames,
+            manifest.animations["idle"]
+                .frames
+                .iter()
+                .map(|f| f.index)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 3]
+        );
+        assert_eq!(
+            manifest.animations["walk-right"]
+                .frames
+                .iter()
+                .map(|f| f.index)
+                .collect::<Vec<_>>(),
             vec![32, 33, 34, 35]
         );
-        assert_eq!(manifest.animations["drag"].frames, vec![36, 37, 38, 39]);
+        assert_eq!(
+            manifest.animations["drag"]
+                .frames
+                .iter()
+                .map(|f| f.index)
+                .collect::<Vec<_>>(),
+            vec![36, 37, 38, 39]
+        );
+    }
+
+    fn manifest_json(animations: &str) -> String {
+        format!(
+            r#"{{ "id": "x", "displayName": "X", "spritesheetPath": "x.png",
+              "frame": {{ "width": 16, "height": 16, "columns": 4, "rows": 1 }},
+              "animations": {{ {animations} }} }}"#
+        )
     }
 
     fn minimal_valid_json() -> String {
@@ -492,7 +667,14 @@ mod tests {
 
         let manifest = PetManifest::from_path(&path).unwrap();
         assert_eq!(manifest.id, "test");
-        assert_eq!(manifest.animations["idle"].frames, vec![0, 1, 2, 3]);
+        assert_eq!(
+            manifest.animations["idle"]
+                .frames
+                .iter()
+                .map(|f| f.index)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 3]
+        );
     }
 
     #[test]
@@ -515,5 +697,104 @@ mod tests {
 
         let err = PetManifest::from_path(&path).unwrap_err();
         assert!(matches!(err, ManifestError::Io(_)));
+    }
+
+    #[test]
+    fn frame_parses_from_bare_integer() {
+        let f: Frame = serde_json::from_str("7").unwrap();
+        assert_eq!(f.index, 7);
+        assert_eq!(f.ms, None);
+    }
+
+    #[test]
+    fn frame_parses_from_object_with_ms() {
+        let f: Frame = serde_json::from_str(r#"{ "index": 9, "ms": 120 }"#).unwrap();
+        assert_eq!(f.index, 9);
+        assert_eq!(f.ms, Some(120));
+    }
+
+    #[test]
+    fn frame_parses_from_object_without_ms() {
+        let f: Frame = serde_json::from_str(r#"{ "index": 3 }"#).unwrap();
+        assert_eq!(f.index, 3);
+        assert_eq!(f.ms, None);
+    }
+
+    #[test]
+    fn frame_from_u32_has_no_ms() {
+        let f = Frame::from(5u32);
+        assert_eq!(f.index, 5);
+        assert_eq!(f.ms, None);
+    }
+
+    #[test]
+    fn rejects_loop_start_out_of_bounds() {
+        let json = manifest_json(r#""idle": { "frames": [0, 1], "loopStart": 5 }"#);
+        let err = PetManifest::from_json_str(&json).unwrap_err();
+        assert!(
+            matches!(err, ManifestError::LoopStartOutOfBounds { .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_unresolved_fallback() {
+        let json = manifest_json(r#""idle": { "frames": [0], "fallback": "nope" }"#);
+        let err = PetManifest::from_json_str(&json).unwrap_err();
+        assert!(
+            matches!(err, ManifestError::UnresolvedFallback { .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn accepts_fallback_idle_even_if_only_idle_defined() {
+        let json = manifest_json(r#""idle": { "frames": [0], "fallback": "idle" }"#);
+        assert!(PetManifest::from_json_str(&json).is_ok());
+    }
+
+    #[test]
+    fn rejects_zero_frame_duration() {
+        let json = manifest_json(r#""idle": { "frames": [{ "index": 0, "ms": 0 }] }"#);
+        let err = PetManifest::from_json_str(&json).unwrap_err();
+        assert!(
+            matches!(err, ManifestError::ZeroFrameDuration { .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_one_shot_with_loop_start() {
+        let json =
+            manifest_json(r#""idle": { "frames": [0, 1], "oneShot": true, "loopStart": 1 }"#);
+        let err = PetManifest::from_json_str(&json).unwrap_err();
+        assert!(
+            matches!(err, ManifestError::OneShotWithLoopStart { .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn accepts_v2_fields_on_manifest_version_1() {
+        let json = manifest_json(
+            r#""idle": { "frames": [{ "index": 0, "ms": 80 }, { "index": 1, "ms": 80 }], "loopStart": 1 }"#,
+        );
+        assert!(PetManifest::from_json_str(&json).is_ok());
+    }
+
+    #[test]
+    fn bundled_manifest_defines_notify_animations() {
+        let manifest = PetManifest::load_embedded_happy_cappy();
+        for name in [
+            "notify-running",
+            "notify-succeeded",
+            "notify-failed",
+            "notify-needs-review",
+            "notify-message",
+        ] {
+            assert!(manifest.animations.contains_key(name), "missing {name}");
+        }
+        // notify-succeeded is a one-shot celebration.
+        assert!(manifest.animations["notify-succeeded"].one_shot);
     }
 }

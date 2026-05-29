@@ -222,22 +222,20 @@ fn default_true() -> bool {
     true
 }
 
-pub fn default_settings_path() -> Result<PathBuf, SettingsError> {
+pub fn app_support_dir() -> Result<PathBuf, SettingsError> {
     let home = std::env::var_os("HOME").ok_or(SettingsError::MissingHomeDirectory)?;
     Ok(PathBuf::from(home)
         .join("Library")
         .join("Application Support")
-        .join("Happy Cappy")
-        .join("settings.json"))
+        .join("Happy Cappy"))
+}
+
+pub fn default_settings_path() -> Result<PathBuf, SettingsError> {
+    Ok(app_support_dir()?.join("settings.json"))
 }
 
 pub fn custom_pets_dir() -> Result<PathBuf, SettingsError> {
-    let home = std::env::var_os("HOME").ok_or(SettingsError::MissingHomeDirectory)?;
-    Ok(PathBuf::from(home)
-        .join("Library")
-        .join("Application Support")
-        .join("Happy Cappy")
-        .join("pets"))
+    Ok(app_support_dir()?.join("pets"))
 }
 
 #[cfg(test)]
@@ -518,6 +516,19 @@ mod tests {
         assert_eq!(settings, AppSettings::default());
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn app_support_dir_is_happy_cappy_root() {
+        let path = app_support_dir().unwrap();
+        assert!(path.ends_with("Library/Application Support/Happy Cappy"));
+    }
+
+    #[test]
+    fn settings_and_pets_paths_live_under_app_support_dir() {
+        let root = app_support_dir().unwrap();
+        assert_eq!(default_settings_path().unwrap(), root.join("settings.json"));
+        assert_eq!(custom_pets_dir().unwrap(), root.join("pets"));
     }
 }
 

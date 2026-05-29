@@ -236,12 +236,7 @@ fn test_bundled_pet() -> BundledPet {
     use crate::pet::manifest::{Animation, FrameGeometry};
     use std::collections::BTreeMap;
     let mut animations = BTreeMap::new();
-    animations.insert(
-        "idle".to_string(),
-        Animation {
-            frames: vec![0, 1, 2, 3],
-        },
-    );
+    animations.insert("idle".to_string(), Animation::from_indices(&[0, 1, 2, 3]));
     let manifest = PetManifest {
         manifest_version: 1,
         id: "happy-cappy".to_string(),

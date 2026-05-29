@@ -784,9 +784,9 @@ mod macos {
             .or_else(|| entry.manifest.animations.values().next())
             .ok_or(PreviewBuildError::NoAnimation)?;
         let geometry = sheet.geometry();
-        let mut frames = Vec::with_capacity(animation.frames.len());
-        for &index in &animation.frames {
-            let rgba = crop_frame_rgba(&sheet, index as usize);
+        let mut frames = Vec::with_capacity(animation.frame_count());
+        for frame in &animation.frames {
+            let rgba = crop_frame_rgba(&sheet, frame.index as usize);
             let image = rgba_to_nsimage(&rgba, geometry.width, geometry.height, mtm);
             frames.push(image);
         }

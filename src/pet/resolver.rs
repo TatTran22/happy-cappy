@@ -22,6 +22,9 @@ pub fn resolve_animation_chain(
             None => &["idle"],
         },
         BehaviorMode::Walking => &["walk-right", "walk", "idle"],
+        // Notifying returns before reaching resolve_animation_chain; this arm
+        // exists only to satisfy exhaustive match requirements.
+        BehaviorMode::Notifying => &["idle"],
         BehaviorMode::Default => match expression_index % 5 {
             0 => &["idle"],
             1 => &["blink", "idle"],
@@ -48,6 +51,25 @@ pub fn lookup_with_fallback<'a>(
     ("idle", idle)
 }
 
+/// Like `lookup_with_fallback`, but accepts runtime `&str` names (e.g. `notify-<kind>`,
+/// a CLI-supplied `animation_name`) and returns an owned resolved name. The `&'static`
+/// version stays for the enum-driven behavior chains.
+pub fn lookup_with_fallback_dynamic<'a>(
+    manifest: &'a PetManifest,
+    chain: &[&str],
+) -> (String, &'a Animation) {
+    for &name in chain {
+        if let Some(anim) = manifest.animations.get(name) {
+            return (name.to_string(), anim);
+        }
+    }
+    let idle = manifest
+        .animations
+        .get("idle")
+        .expect("manifest validation guarantees 'idle' exists");
+    ("idle".to_string(), idle)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -57,7 +79,7 @@ mod tests {
     fn fixture_manifest(animation_names: &[&str]) -> PetManifest {
         let mut animations = BTreeMap::new();
         for name in animation_names {
-            animations.insert((*name).to_string(), Animation { frames: vec![0] });
+            animations.insert((*name).to_string(), Animation::from_indices(&[0]));
         }
         PetManifest {
             manifest_version: 1,
@@ -180,5 +202,31 @@ mod tests {
         let manifest = fixture_manifest(&["idle", "notify-running"]);
         let (name, _) = lookup_with_fallback(&manifest, &["notify-running", "idle"]);
         assert_eq!(name, "notify-running");
+    }
+
+    #[test]
+    fn dynamic_lookup_returns_first_present_name() {
+        let manifest = fixture_manifest(&["idle", "notify-running"]);
+        let (name, _) = lookup_with_fallback_dynamic(
+            &manifest,
+            &["notify-deploy", "notify-running", "notify-message", "idle"],
+        );
+        assert_eq!(name, "notify-running");
+    }
+
+    #[test]
+    fn dynamic_lookup_falls_back_to_idle() {
+        let manifest = fixture_manifest(&["idle"]);
+        let (name, _) =
+            lookup_with_fallback_dynamic(&manifest, &["notify-running", "notify-message"]);
+        assert_eq!(name, "idle");
+    }
+
+    #[test]
+    fn dynamic_lookup_honors_runtime_string_first() {
+        let manifest = fixture_manifest(&["idle", "notify-custom"]);
+        let requested = format!("notify-{}", "custom");
+        let (name, _) = lookup_with_fallback_dynamic(&manifest, &[requested.as_str(), "idle"]);
+        assert_eq!(name, "notify-custom");
     }
 }

@@ -61,6 +61,7 @@ pub enum AppCommand {
     RevealPetsFolder,
     RefreshPetMenu,
     ShowPicker,
+    Notify(crate::notification::NotificationEvent),
 }
 
 #[derive(Debug)]
@@ -813,6 +814,16 @@ impl DesktopPetApp {
             AppCommand::ShowPicker => {
                 self.show_picker_window();
             }
+            AppCommand::Notify(event) => {
+                log::info!(
+                    "notification received: kind={:?} label={:?} body={:?} ttl_ms={:?} priority={:?}",
+                    event.kind, event.label, event.body, event.ttl_ms, event.priority
+                );
+                self.pet.set_notification(&event);
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
         }
         true
     }
@@ -985,7 +996,8 @@ impl DesktopPetApp {
             crate::pet::BehaviorMode::Hovered
             | crate::pet::BehaviorMode::Dragging
             | crate::pet::BehaviorMode::Action
-            | crate::pet::BehaviorMode::Walking => TARGET_FRAME_TIME,
+            | crate::pet::BehaviorMode::Walking
+            | crate::pet::BehaviorMode::Notifying => TARGET_FRAME_TIME,
             crate::pet::BehaviorMode::Hidden => Duration::from_secs(5),
             crate::pet::BehaviorMode::Default => match self.pet.state() {
                 PetState::Walk => TARGET_FRAME_TIME,
@@ -1572,6 +1584,22 @@ mod tests {
     }
 
     #[test]
+    fn notify_command_enters_notifying_mode() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.settings_path = None;
+        let ev = crate::notification::NotificationEvent {
+            kind: "running".to_string(),
+            animation_name: None,
+            label: None,
+            body: None,
+            ttl_ms: None,
+            priority: None,
+        };
+        assert!(app.handle_non_quit_command_for_test(AppCommand::Notify(ev)));
+        assert_eq!(app.pet.behavior_mode(), crate::pet::BehaviorMode::Notifying);
+    }
+
+    #[test]
     fn mouse_button_kind_maps_winit_buttons_to_interaction_buttons() {
         assert_eq!(
             DesktopPetApp::mouse_button_kind(winit::event::MouseButton::Left),
@@ -1644,12 +1672,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
 
         let mut animations = BTreeMap::new();
-        animations.insert(
-            "idle".to_string(),
-            Animation {
-                frames: vec![0, 1, 2, 3],
-            },
-        );
+        animations.insert("idle".to_string(), Animation::from_indices(&[0, 1, 2, 3]));
         let bundled = BundledPet {
             manifest: PetManifest {
                 manifest_version: 1,

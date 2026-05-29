@@ -35,7 +35,7 @@ A single `frame` deserializes from **either** a bare integer (v1) or an object (
 "idle": { "frames": [0, 1, 2, 3] },
 
 // v2 one-shot — per-frame ms, plays once, then enters `fallback`:
-"notify-success": {
+"notify-succeeded": {
   "frames": [
     { "index": 8,  "ms": 80 },
     { "index": 9,  "ms": 80 },
