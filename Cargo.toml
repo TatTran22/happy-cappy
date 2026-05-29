@@ -53,6 +53,7 @@ objc2-foundation = { version = "0.3", features = ["NSDate", "NSTimer"] }
 objc2-core-foundation = { version = "0.3", features = [
   "CFArray",
   "CFCGTypes",
+  "CFData",
   "CFDictionary",
   "CFNumber",
   "CFString",

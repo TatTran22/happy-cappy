@@ -48,7 +48,7 @@ mod macos {
         NSTextField, NSView, NSWindowStyleMask,
     };
     use objc2_core_foundation::CFRetained;
-    use objc2_core_foundation::CGSize;
+    use objc2_core_foundation::{CFData, CFIndex, CGSize};
     use objc2_core_graphics::{
         CGBitmapInfo, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGImage,
         CGImageAlphaInfo, CGImageByteOrderInfo,
@@ -667,28 +667,31 @@ mod macos {
         out
     }
 
-    /// Convert a packed RGBA byte buffer into a `Retained<NSImage>`.
+    /// Convert a packed RGBA byte buffer into a `CGImage` that owns its pixels.
     ///
     /// `rgba` must have exactly `width * height * 4` bytes (row stride is
-    /// `width * 4`). The buffer is borrowed only for the duration of this
-    /// call; Core Graphics copies the pixel data before the function returns.
-    pub(super) fn rgba_to_nsimage(
-        rgba: &[u8],
-        width: u32,
-        height: u32,
-        _mtm: MainThreadMarker,
-    ) -> Retained<NSImage> {
+    /// `width * 4`). The returned `CGImage` keeps its own copy of the pixel
+    /// data, so the caller's `rgba` slice may be freed immediately afterward.
+    pub(super) fn rgba_to_cgimage(rgba: &[u8], width: u32, height: u32) -> CFRetained<CGImage> {
         let row_bytes = (width as usize) * 4;
         debug_assert_eq!(rgba.len(), row_bytes * height as usize);
 
-        // SAFETY: `rgba` is valid for `rgba.len()` bytes. We pass `None` for
-        // the release callback because `CGDataProvider` won't outlive the call
-        // site — the `CGImage` (and hence the provider) is consumed when
-        // `initWithCGImage_size` copies the pixels into NSImage.
-        let provider: CFRetained<CGDataProvider> = unsafe {
-            CGDataProvider::with_data(std::ptr::null_mut(), rgba.as_ptr().cast(), rgba.len(), None)
-        }
-        .expect("CGDataProvider::with_data returned null");
+        // Copy the pixels into a `CFData` so the `CGImage` owns its own backing
+        // store. The resulting `CGImage` keeps the provider (and therefore the
+        // `CFData`) alive for as long as the image lives, so `rgba` is free to
+        // be dropped the instant this function returns. Using a borrowed
+        // pointer here (e.g. `CGDataProvider::with_data` with no release
+        // callback) is a use-after-free: `CGImage` reads pixels lazily at draw
+        // time, long after the caller's buffer is gone.
+        //
+        // SAFETY: `rgba.as_ptr()` is valid for `rgba.len()` bytes, and
+        // `CFDataCreate` copies those bytes before returning.
+        let data: CFRetained<CFData> =
+            unsafe { CFData::new(None, rgba.as_ptr(), rgba.len() as CFIndex) }
+                .expect("CFData::new returned null");
+
+        let provider: CFRetained<CGDataProvider> = CGDataProvider::with_cf_data(Some(&data))
+            .expect("CGDataProvider::with_cf_data returned null");
 
         let color_space: CFRetained<CGColorSpace> =
             CGColorSpace::new_device_rgb().expect("CGColorSpace::new_device_rgb returned null");
@@ -700,7 +703,7 @@ mod macos {
 
         // SAFETY: `decode` is null (use default), which is explicitly allowed
         // per the CG API contract.
-        let cg_image: CFRetained<CGImage> = unsafe {
+        unsafe {
             CGImage::new(
                 width as usize,
                 height as usize,
@@ -715,7 +718,21 @@ mod macos {
                 CGColorRenderingIntent::RenderingIntentDefault,
             )
         }
-        .expect("CGImage::new returned null");
+        .expect("CGImage::new returned null")
+    }
+
+    /// Convert a packed RGBA byte buffer into a `Retained<NSImage>`.
+    ///
+    /// `rgba` must have exactly `width * height * 4` bytes (row stride is
+    /// `width * 4`). The pixel data is copied into the image, so `rgba` may be
+    /// freed as soon as this call returns.
+    pub(super) fn rgba_to_nsimage(
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        _mtm: MainThreadMarker,
+    ) -> Retained<NSImage> {
+        let cg_image = rgba_to_cgimage(rgba, width, height);
 
         let size = CGSize {
             width: width as f64,
@@ -829,10 +846,11 @@ pub use macos::{attach_preview_frames, PickerEntry, PreviewBuildError};
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::macos::crop_frame_rgba;
+    use super::macos::{crop_frame_rgba, rgba_to_cgimage};
     use crate::pet::manifest::FrameGeometry;
     use crate::sprite::SpriteSheet;
     use image::{Rgba, RgbaImage};
+    use objc2_core_graphics::{CGDataProvider, CGImage};
 
     fn checkered_sheet() -> SpriteSheet {
         // 2 frames wide × 1 frame tall, each frame 2×2 px.
@@ -873,5 +891,45 @@ mod tests {
         assert_eq!(rgba[4], 60);
         assert_eq!(rgba[8], 70);
         assert_eq!(rgba[12], 80);
+    }
+
+    /// Read the pixel bytes back out of a `CGImage` via its data provider.
+    fn cgimage_bytes(image: &CGImage) -> Vec<u8> {
+        let provider = CGImage::data_provider(Some(image)).expect("image has a data provider");
+        let data = CGDataProvider::data(Some(&provider)).expect("provider yields data");
+        let len = data.length() as usize;
+        let ptr = data.byte_ptr();
+        assert!(!ptr.is_null());
+        // SAFETY: `ptr` points to `len` valid bytes owned by `data`, which is
+        // alive for the duration of this borrow.
+        unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec()
+    }
+
+    #[test]
+    fn cgimage_retains_pixels_after_source_buffer_freed() {
+        // A 2×1 RGBA image with four distinct, recognizable pixels.
+        let original: Vec<u8> = vec![11, 22, 33, 255, 44, 55, 66, 255];
+
+        // Build the image from a buffer that is dropped before we read back.
+        let image = {
+            let src = original.clone();
+            rgba_to_cgimage(&src, 2, 1)
+            // `src` is dropped here — its heap allocation is freed.
+        };
+
+        // Aggressively reuse the just-freed allocation so that a use-after-free
+        // surfaces as a byte mismatch rather than silently reading stale data.
+        let mut clobber: Vec<Vec<u8>> = Vec::new();
+        for _ in 0..256 {
+            clobber.push(vec![0xABu8; original.len()]);
+        }
+        std::hint::black_box(&clobber);
+
+        let read_back = cgimage_bytes(&image);
+        assert_eq!(
+            &read_back[..original.len()],
+            &original[..],
+            "CGImage must own a copy of the pixels, independent of the source buffer"
+        );
     }
 }
