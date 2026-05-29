@@ -1,5 +1,10 @@
 # Pet Picker Window Implementation Plan
 
+> **Status:** ✅ Completed — implemented and merged to `main` at `26a4241` (2026-05-29).
+> Automated suite (232 tests, clippy, fmt) green; GUI smoke scenarios verified.
+> Smoke testing also caught and fixed a `CGImage` use-after-free in the preview
+> pipeline (see the design spec's post-merge note).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add an in-window Pet Library picker that lists every pet in the catalog with an animated idle preview, shows error rows for failed custom pets, and activates a selected pet via an explicit Apply button.

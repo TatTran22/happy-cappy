@@ -1,9 +1,16 @@
 # Pet Picker Window — Design Spec (Sub-Project 3)
 
-**Status:** approved
+**Status:** implemented — merged to `main` at `26a4241` (2026-05-29)
 **Date:** 2026-05-27
 **Predecessor:** [2026-05-27-pet-catalog-design.md](./2026-05-27-pet-catalog-design.md) (sub-project 2, merged at `5906f62`)
 **Roadmap position:** sub-project 3 of 4
+
+> **Post-merge note (2026-05-29):** GUI smoke testing surfaced a use-after-free
+> in the preview pipeline — `rgba_to_nsimage` built its `CGImage` from a borrowed
+> pixel buffer that `build_preview_frames` freed before draw time, so some
+> preview frames rendered as garbage. Fixed in `26a4241` by copying pixels into
+> a `CFData`-backed `CGImage` (`rgba_to_cgimage`), with a regression test that
+> drops and clobbers the source buffer before reading the image back.
 
 ## 1. Context
 
