@@ -16,8 +16,8 @@ SP4-A delivers that animation engine. It is the foundation SP4-B builds on (noti
 
 - Extend the manifest schema to v2 with **optional** per-frame `ms`, `loopStart`, `fallback`, and `oneShot`.
 - Keep **100% backward compatibility** with v1 manifests: the bundled `assets/manifests/happy_cappy.json` and any existing custom pet manifest parse and animate byte-for-byte identically.
-- Add runtime support for: per-frame timing override, loop-from-point, and one-shot animations that transition to a `fallback` animation on completion.
-- Expose a "one-shot completed" signal from the runtime so SP4-B can end a notification when its one-shot animation finishes.
+- Add runtime support for: per-frame timing override, loop-from-point, and one-shot animations that **expose a completion signal plus `fallback` metadata for an owner to consume** — the engine does not auto-apply the transition (see §5.3 for why; `refresh_behavior_mode` would otherwise clobber it).
+- Expose a "one-shot completed" signal from the runtime so an owner (e.g. SP4-B's notification) can end its override when the one-shot animation finishes.
 
 ## 3. Non-goals
 

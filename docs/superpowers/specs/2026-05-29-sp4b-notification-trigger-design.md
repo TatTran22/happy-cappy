@@ -40,13 +40,15 @@ Priorities are ordered so **attention/blocking states (`needs-review`, `failed`)
 
 ### Animation resolution
 
-The requested animation name is `animation_name` if set, else `notify-<kind>`. The runtime resolves it against the manifest using a **dynamic** lookup helper (see §9 — the existing `lookup_with_fallback` only accepts `&'static str`) with the chain:
+The requested animation name is `animation_name` if set, else `notify-<kind>`. Resolution happens **once, in `set_notification`** (not per refresh): the runtime resolves the name against the current manifest using a **dynamic** lookup helper (see §9 — the existing `lookup_with_fallback` only accepts `&'static str`) over the chain:
 
 ```
 [ requested, "notify-<kind>", "notify-message", "notify-running", "idle" ]
 ```
 
-`notify-<kind>` is tried **even for unknown kinds**, so a custom pet that defines, say, `notify-deploy` will react to `--kind deploy` with no code change. A pet missing all `notify-*` animations still does something sensible (eventually `idle`). Custom pets may define their own `notify-*` animations.
+The single resolved name is stored in `NotificationState.animation_name` (§3); thereafter `Notifying` just pins that stored name (§3.3). Resolving once is sufficient because the manifest is stable for a notification's lifetime — a pet swap *clears* the notification (§3.4) rather than re-resolving it.
+
+`notify-<kind>` is tried **even for unknown kinds**, so a custom pet that defines, say, `notify-deploy` will react to `--kind deploy` with no code change. A pet missing all `notify-*` animations still resolves to something sensible (eventually `idle`). Custom pets may define their own `notify-*` animations.
 
 ## 3. Runtime state (`src/pet/runtime.rs`)
 
@@ -95,7 +97,7 @@ Hidden > Dragging > Hovered > Notifying > Action(micro) > Walking > Default
 - A new `BehaviorMode::Notifying` is selected only when `notification.is_some()` and no higher state applies.
 - Dragging/hovering takes over immediately (shows drag/hover animation); when interaction ends, if TTL remains the notify animation resumes (restarting from frame 0 per §3.1a).
 - Notification preempts micro-actions (Nap/CheerUp) and walking/idle.
-- The `Notifying` branch **does not** call `resolve_animation_chain` (which returns `&'static [&'static str]` and cannot carry `animation_name`/`format!("notify-{kind}")`). Instead `refresh_behavior_mode`, when in `Notifying`, **pins** the notification's animation by calling the dynamic helper (§2, §9) directly with the runtime chain and using its returned `String`. The static `resolve_animation_chain` stays unchanged for every other mode.
+- The `Notifying` branch **does not** call `resolve_animation_chain` (which returns `&'static [&'static str]` and cannot carry `animation_name`/`format!("notify-{kind}")`). Instead `refresh_behavior_mode`, when in `Notifying`, simply **pins `notification.animation_name`** — the name already resolved once in `set_notification` (§2) via the dynamic helper. No re-resolution happens per refresh/tick. The static `resolve_animation_chain` stays unchanged for every other mode; the dynamic helper (§9) is used only at `set_notification` time.
 
 ### 3.4 Pet swap clears the notification (decided)
 
@@ -138,7 +140,7 @@ happy-cappy notify --kind failed  --body "3 tests failed"
 happy-cappy notify --kind message --animation notify-message --label "Hi"
 ```
 
-Flags: `--kind` (required), `--animation`, `--label`, `--body`, `--ttl` (seconds), `--priority`. The client serializes these into a `NotificationEvent` JSON line (the same shape `parse_notify_line` accepts).
+Flags: `--kind` (required), `--animation`, `--label`, `--body`, `--ttl` (seconds), `--priority`. The client serializes these into a `NotificationEvent` JSON line (the same shape `parse_notify_line` accepts). (`happy-cappy` above is the built binary — `target/release/happy-cappy` or the copy inside `dist/Happy Cappy.app/Contents/MacOS/`; SP4 does not install it on `PATH`.)
 
 ## 5. Bundled manifest — add `notify-*` animations
 
@@ -170,14 +172,15 @@ The bundled spritesheet is full (40 frames, all assigned), so `notify-*` animati
 - **Bind outcomes (no `process::exit` in tests):** `bind_control_socket` returns `Bound` on a clean path; `AlreadyRunning` when a live listener already holds the path; `Bound` again after a *stale* socket file is pre-created (server unlinks + rebinds). Tests assert on the returned `BindOutcome`.
 - **Missing-dir startup:** point `app_support_dir` at a non-existent temp path; assert startup `create_dir_all`s it then binds successfully (fresh-install case).
 - **Degraded mode:** an un-bindable path (e.g. dir creation forced to fail) yields `Failed`; assert the app proceeds without a control socket rather than aborting.
-- **`refresh_behavior_mode` priority + pin:** `Notifying` loses to Dragging/Hovered, beats micro-action/Walking/Default; while `Notifying`, the resolved animation comes from the dynamic helper (carrying a runtime `animation_name`/`notify-<kind>`), **not** from `resolve_animation_chain`.
+- **`refresh_behavior_mode` priority + pin:** `Notifying` loses to Dragging/Hovered, beats micro-action/Walking/Default; while `Notifying` the pinned animation is the name stored at `set_notification` (resolved once via the dynamic helper, carrying a runtime `animation_name`/`notify-<kind>`), **not** a fresh `resolve_animation_chain` lookup.
+- **Resolve-once:** `set_notification` resolves and stores the animation name a single time; later `refresh_behavior_mode`/`tick` calls reuse the stored name without re-resolving.
 - **Dev-agent preset integration test (generic):** simulate a "build script" sending `running` then `succeeded`; assert the runtime's resolved animation transitions accordingly. No Claude/Codex names in core.
 
 ## 8. Exit criteria
 
 - All new unit + integration tests pass under `cargo test`.
 - `cargo clippy --all-targets --all-features -- -D warnings` clean; `cargo fmt --check` clean; `./scripts/verify.sh` passes.
-- Manual smoke: launch app; from a second terminal run `happy-cappy notify --kind running` → pet switches to the running animation; run `--kind succeeded` → success animation plays once then returns; `--kind failed` while `running` is active → failed preempts (higher priority); dragging the pet during a notification shows the drag animation and the notify animation resumes on release; sending a notify with no app running prints a clear error.
+- Manual smoke (the binary is not on `PATH` — invoke it by path; `BIN` below is either `target/release/happy-cappy` after `cargo build --release`, or `"dist/Happy Cappy.app/Contents/MacOS/happy-cappy"` after `scripts/build_app.sh`): launch the app, then from a second terminal: `"$BIN" notify --kind running` → pet switches to the running animation; `"$BIN" notify --kind succeeded` → success animation plays once then returns; `"$BIN" notify --kind failed` while `running` is active → failed preempts (higher priority); dragging the pet during a notification shows the drag animation and the notify animation resumes on release; running a `notify` with no app running prints a clear error and exits non-zero.
 - No regressions in SP2/SP3 menu, picker, settings, focus mode, micro-actions, or drag.
 
 ## 9. Dependencies
