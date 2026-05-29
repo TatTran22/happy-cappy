@@ -66,7 +66,7 @@ struct NotificationState {
 
 - Decrement `remaining` by `dt`; when it hits zero, clear the notification.
 - **TTL keeps counting even while a drag/hover override hides the notify animation** (§3.3). It does not pause for interaction — if the pet is dragged for the whole TTL, the notification expires in the background and nothing resumes on release.
-- If the resolved animation is `one_shot` (SP4-A) and the engine reports it **completed** before the TTL elapses, clear the notification immediately (a "success" plays its celebration once and is done). Looping animations run for the full TTL.
+- If the resolved animation is `one_shot` (SP4-A) and the engine reports it **completed** before the TTL elapses, clear the notification immediately (a "success" plays its celebration once and is done). Looping animations run for the full TTL. This consumption follows SP4-A §5.3 ordering: within `tick`, `advance_animation` sets the `oneshot_completed` flag → the notification reads it and clears itself → `refresh_behavior_mode` then re-selects (now no notification → falls back to the behavior chain). The notification is the "owner" that reacts to the signal; `advance_animation` never rewrites the animation name itself.
 - Producers extend a long-running state by re-sending (see preemption: equal priority = latest-wins, which resets the TTL).
 
 ### 3.1a Animation cursor reset
@@ -93,9 +93,9 @@ Hidden > Dragging > Hovered > Notifying > Action(micro) > Walking > Default
 ```
 
 - A new `BehaviorMode::Notifying` is selected only when `notification.is_some()` and no higher state applies.
-- Dragging/hovering takes over immediately (shows drag/hover animation); when interaction ends, if TTL remains the notify animation resumes.
+- Dragging/hovering takes over immediately (shows drag/hover animation); when interaction ends, if TTL remains the notify animation resumes (restarting from frame 0 per §3.1a).
 - Notification preempts micro-actions (Nap/CheerUp) and walking/idle.
-- `resolve_animation_chain` gains a `Notifying` branch returning the resolved-name chain from §2.
+- The `Notifying` branch **does not** call `resolve_animation_chain` (which returns `&'static [&'static str]` and cannot carry `animation_name`/`format!("notify-{kind}")`). Instead `refresh_behavior_mode`, when in `Notifying`, **pins** the notification's animation by calling the dynamic helper (§2, §9) directly with the runtime chain and using its returned `String`. The static `resolve_animation_chain` stays unchanged for every other mode.
 
 ## 4. Transport: Unix socket + `notify` CLI (single binary)
 
@@ -105,16 +105,24 @@ Hidden > Dragging > Hovered > Notifying > Action(micro) > Walking > Default
 - The bind happens in `main.rs` **before `event_loop.run_app(...)`**, not in `resumed()`. `resumed()` already builds assets → window → menu (`app.rs:1160`); binding there would risk a second UI flashing up before the single-instance check, and a listener thread has no `ActiveEventLoop::exit()` handle. Startup order:
   1. parse `argv` — a `notify` subcommand takes the client path (§4.3) and returns;
   2. otherwise build the `EventLoop::<AppCommand>` and its proxy (`event_loop.create_proxy()`);
-  3. **bind the control socket** (§4.2). If another live instance is detected, print to stderr and **exit before any GUI is created**;
-  4. spawn a `std::thread` owning a `UnixListener` + a proxy clone; each connection: read one line, `parse_notify_line(&str) -> Result<NotificationEvent, _>` (bounded — §6), then `proxy.send_event(AppCommand::Notify(event))`;
-  5. `event_loop.run_app(&mut app)` as today.
+  3. ensure the app-support dir exists: `create_dir_all(app_support_dir()?)` — see §4.2. On a fresh install this dir does not exist yet (it is otherwise created lazily on first settings save / catalog scan, both of which run *after* this point), so the bind would fail without it;
+  4. **bind the control socket** (§4.2). `BindOutcome::AlreadyRunning` → print to stderr and **exit before any GUI is created**;
+  5. on a successful bind, spawn a `std::thread` owning the `UnixListener` + a proxy clone; each connection: read one line, `parse_notify_line(&str) -> Result<NotificationEvent, _>` (bounded — §6), then `proxy.send_event(AppCommand::Notify(event))`;
+  6. `event_loop.run_app(&mut app)` as today.
 - The event loop is already `EventLoop::<AppCommand>::with_user_event()`; SP4-B adds `AppCommand::Notify(NotificationEvent)`. `handle_non_quit_command` handles it by calling `self.pet.set_notification(...)` (which applies preemption from §3.2). No event-loop type change. The listener thread only ever *sends* events — it never needs to drive or exit the loop.
 
-### 4.2 Bind / stale-socket / single-instance
+### 4.2 App-support dir, bind, stale-socket, single-instance
 
-The bind (startup step 3) handles a pre-existing socket path:
-- try `UnixStream::connect`; if it **succeeds**, another instance is already running → log to stderr and `process::exit` (free single-instance guard) **before GUI init**;
-- if it **fails** (stale socket from a crash), `unlink` the path and re-bind.
+- **`app_support_dir() -> Result<PathBuf, _>` helper:** returns `~/Library/Application Support/Happy Cappy`. `settings.rs` currently derives this path inline in two places (`default_settings_path`, `custom_pets_dir`); SP4-B adds the shared helper and uses it for the socket. (Migrating the existing two call sites onto it is a nice-to-have, not required by this spec.) The dir is created with `create_dir_all` before binding; permissions `0700` on the dir.
+- **Bind seam for testability:** the bind is a pure-ish function returning an outcome enum rather than calling `process::exit` itself:
+
+  ```rust
+  enum BindOutcome { Bound(UnixListener), AlreadyRunning, Failed(io::Error) }
+  fn bind_control_socket(path: &Path) -> BindOutcome
+  ```
+
+  On a pre-existing socket path it: tries `UnixStream::connect` → success ⇒ `AlreadyRunning`; connect failure (stale socket from a crash) ⇒ `unlink` + re-bind. `main` maps `AlreadyRunning` → stderr + `process::exit`; integration tests assert on the returned `BindOutcome` without ever exiting the test process. Sets the socket file to `0600` after bind.
+- **Degraded mode:** if `app_support_dir` creation or `bind` returns `Failed` (not `AlreadyRunning`), log a `warn!` and **continue running the GUI without a control socket** — the pet still works; only external triggers are unavailable. The app never refuses to start because notifications could not be wired.
 
 ### 4.3 CLI client (`main.rs`)
 
@@ -151,8 +159,11 @@ The bundled spritesheet is full (40 frames, all assigned), so `notify-*` animati
 - **Input bounds:** a >64 KiB line is rejected; over-length `kind`/`label`/`body`/`animation_name` truncated; `ttl_ms` clamped to `[1 ms, 24 h]`; `priority` clamped to `[0, 100]`.
 - **`parse_notify_line`:** valid JSON; missing optional fields; invalid JSON; missing required `kind`.
 - **CLI arg parsing (clap):** flag combinations; missing `--kind`; non-numeric `--ttl`/`--priority`.
-- **Socket I/O (integration):** bind a `UnixListener` on a `tempfile` socket path, connect a `UnixStream`, send a line, assert the parsed event is delivered; stale-socket cleanup (pre-create a dead socket file → server unlinks + rebinds); single-instance (second bind sees a live connect → exits).
-- **`refresh_behavior_mode` priority:** `Notifying` loses to Dragging/Hovered, beats micro-action/Walking/Default.
+- **Socket I/O (integration):** bind via `bind_control_socket` on a `tempfile` socket path, connect a `UnixStream`, send a line, assert the parsed event is delivered.
+- **Bind outcomes (no `process::exit` in tests):** `bind_control_socket` returns `Bound` on a clean path; `AlreadyRunning` when a live listener already holds the path; `Bound` again after a *stale* socket file is pre-created (server unlinks + rebinds). Tests assert on the returned `BindOutcome`.
+- **Missing-dir startup:** point `app_support_dir` at a non-existent temp path; assert startup `create_dir_all`s it then binds successfully (fresh-install case).
+- **Degraded mode:** an un-bindable path (e.g. dir creation forced to fail) yields `Failed`; assert the app proceeds without a control socket rather than aborting.
+- **`refresh_behavior_mode` priority + pin:** `Notifying` loses to Dragging/Hovered, beats micro-action/Walking/Default; while `Notifying`, the resolved animation comes from the dynamic helper (carrying a runtime `animation_name`/`notify-<kind>`), **not** from `resolve_animation_chain`.
 - **Dev-agent preset integration test (generic):** simulate a "build script" sending `running` then `succeeded`; assert the runtime's resolved animation transitions accordingly. No Claude/Codex names in core.
 
 ## 8. Exit criteria
@@ -171,6 +182,6 @@ The bundled spritesheet is full (40 frames, all assigned), so `notify-*` animati
 | **new** dynamic lookup helper `lookup_with_fallback_dynamic(&PetManifest, &[&str]) -> (String, &Animation)` — the existing `lookup_with_fallback` only accepts `&[&'static str]`/returns `&'static str`, which can't carry CLI/user-supplied or `format!("notify-{kind}")` names. The static version stays for the enum-driven behavior chains. | new in SP4-B (resolver.rs) |
 | `EventLoop::<AppCommand>::with_user_event()`, `EventLoopProxy<AppCommand>`, `handle_non_quit_command`, `ApplicationHandler<AppCommand>` | existing (SP1–SP3) |
 | `ActionOverride` priority pattern in `refresh_behavior_mode` | existing (mirrored, not refactored) |
-| App-support dir resolution (same as `pets/`, `settings.json`) | SP2 |
+| App-support dir resolution — **new** shared `app_support_dir()` helper (settings.rs currently inlines the path in `default_settings_path`/`custom_pets_dir`) | new in SP4-B (settings.rs) |
 
 New dependency: **`clap`** (CLI flag parsing) — a deliberate deviation from the lean-deps style, chosen for robust subcommand handling.

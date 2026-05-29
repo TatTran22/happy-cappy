@@ -79,6 +79,7 @@ pub struct Frame {
 - `Frame` custom/untagged `Deserialize`: a JSON number → `Frame { index, ms: None }`; a JSON object `{ "index", "ms"? }` → `Frame { index, ms }`.
 - `loop_start`, `fallback`, `one_shot` are all optional with defaults that preserve current behavior (`None`, `None`, `false`).
 - `one_shot` and `loop_start` are **mutually exclusive** (a one-shot does not loop) — setting both is a validation error (see below).
+- **Version policy (decided — lenient):** v2 fields (object frames, `loopStart`, `oneShot`, `fallback`) are accepted on **any** `manifest_version`. They are optional and additive, so no version bump is required and existing v1 manifests need no change. `manifest_version` is reserved for future *breaking* changes; the bundled `happy_cappy.json` stays at version 1 even after `notify-*` v2 animations are added in SP4-B. (Chosen over requiring `manifest_version >= 2`.)
 - The existing `Animation { frames: Vec<u32> }` callers (`current_sprite_index`, `advance_animation`, resolver fixtures, picker preview) switch from `frames: Vec<u32>` to `frames: Vec<Frame>`; sprite index is read via `frame.index`.
 
 ### Validation (extends existing `validate()`)
@@ -103,20 +104,35 @@ Because v1 manifests carry no `ms`, every existing animation keeps runtime-drive
 
 ### 5.2 loop_start
 
-When the animation index passes the last frame, it wraps to `loop_start` (default `0`) instead of `0`. Frames `0..loop_start` act as a one-time intro; `loop_start..len` is the steady-state loop. Default `0` preserves current full-cycle looping.
+When the animation index passes the last frame, it wraps to `loop_start` instead of `0`: frames `0..loop_start` are a one-time intro and `loop_start..len` is the steady-state loop. `loop_start` defaults to `0`, which preserves current full-cycle looping. The intro only plays when the cursor starts at 0 — guaranteed by the entry-reset policy in §5.4.
 
 ### 5.3 one_shot + fallback
 
-When a `one_shot` animation reaches its final frame:
+A `one_shot` animation **completes when its final frame has been displayed for its full duration** — not the instant the index reaches the last frame. On completion the runtime:
 
-- the runtime sets `current_animation_name` to `fallback` (or `"idle"` if `fallback` is `None`), resets `frame_index`/`frame_elapsed`, and
-- exposes a signal that the one-shot just completed (e.g. `tick()` returns it via `PetTick`, or a `took_oneshot_completed()` accessor). SP4-B uses this to clear a notification whose animation has finished.
+- surfaces a **completion signal** on the value `tick()` returns (a `oneshot_completed: bool` on `PetTick`), and
+- exposes the active animation's `fallback` via an accessor so the owner can transition (to `fallback`, or `"idle"` when `None`).
 
-A non-`one_shot` animation never auto-transitions; it loops per §5.2.
+`advance_animation` **must not itself overwrite** `current_animation_name`: `refresh_behavior_mode` recomputes the animation every tick (§5.4) and would clobber it. Instead the animation's *owner* reacts to the signal. Ordering within `tick` is fixed and explicit:
 
-### 5.4 Interaction with behavior-mode selection
+```
+advance_animation()      // detect + set oneshot_completed flag (does NOT change the name)
+→ owner consumes flag     // e.g. SP4-B notification clears itself before refresh
+→ refresh_behavior_mode() // re-selects the next animation
+```
 
-`refresh_behavior_mode` / `resolve_animation_chain` are unchanged in SP4-A. The engine only changes *how a chosen animation advances and terminates*, not *which* animation the behavior model selects. (SP4-B adds a new selector branch.)
+For a **pinned** animation (selected by an override owner, not the behavior chain — introduced by SP4-B's notification), completion drives the transition to `fallback`. For **chain-driven** animations (Default/hover/walk), one-shot/fallback has no effect — the chain re-selects each tick, so only non-one-shot animations are ever chosen that way. one-shot/fallback is therefore meaningful only for pinned/override animations; SP4-A ships the primitive + signal and unit-tests it in isolation.
+
+### 5.4 Behavior-mode selection & entry-reset policy
+
+`resolve_animation_chain` is unchanged. `refresh_behavior_mode` gains exactly **one** change: an *entry-reset* rule.
+
+Today the runtime preserves `frame_index` when the selected animation **name** changes (protected by the `animation_name_change_does_not_reset_frame_index` test) — this keeps hover/walk transitions smooth and is parity behavior. But a `loop_start` intro or a `one_shot` must start at frame 0 to play correctly. So:
+
+- When the selected animation name changes **to a lifecycle animation** (`loop_start.is_some()` or `one_shot == true`), reset the cursor (`frame_index = 0`, `frame_elapsed = 0`).
+- When it changes to any other animation, **preserve** the cursor (unchanged parity behavior).
+
+The bundled v1 manifest has no lifecycle animations, so this rule is inert for it (full parity). It first takes effect when SP4-B adds `notify-*` lifecycle animations. (SP4-B additionally adds a `Notifying` selector branch — see SP4-B §3.3 — that pins the notification's resolved animation instead of consulting `resolve_animation_chain`.)
 
 ## 6. Error handling
 
@@ -129,8 +145,10 @@ A non-`one_shot` animation never auto-transitions; it loops per §5.2.
 - **Parse:** bare-int frames; object frames; mixed bare+object in one animation; `loopStart`/`fallback`/`oneShot` present and absent; defaults applied.
 - **Validation failures:** `loop_start >= len`; unresolved `fallback`; `ms == 0`; `oneShot` + `loopStart` together; plus all existing checks still pass.
 - **Runtime timing:** an animation with per-frame `ms` advances at exactly those durations; an animation without `ms` uses runtime-computed durations.
-- **loop_start:** after the last frame, index returns to `loop_start`, not 0.
-- **one_shot:** plays each frame once, then `current_animation_name` becomes `fallback` (or `idle`), and the completion signal fires exactly once.
+- **loop_start:** after the last frame, index returns to `loop_start`, not 0; the `0..loop_start` intro is not replayed on subsequent loops.
+- **Entry-reset:** selecting a lifecycle animation (has `loop_start`/`one_shot`) resets the cursor to frame 0; selecting a non-lifecycle animation preserves the cursor (the existing `animation_name_change_does_not_reset_frame_index` behavior still holds).
+- **one_shot completion:** the completion signal fires **only after the final frame has been shown for its full duration** (a one-frame-early or one-tick-late assertion), fires exactly once, and the animation's `fallback` is exposed for the owner to consume. `advance_animation` does not mutate `current_animation_name`.
+- **Version policy:** a `manifest_version: 1` manifest carrying `loopStart`/`oneShot`/object frames parses and validates (lenient policy).
 - **Parity test:** load the bundled v1 manifest and assert the full frame-index sequence and per-frame timing match the pre-SP4 behavior for `idle`/`walk-right`/`hover-*`/`sleepy` over a representative tick window.
 
 ## 8. Exit criteria
