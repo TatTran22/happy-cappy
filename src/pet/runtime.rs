@@ -74,6 +74,10 @@ pub struct PetRuntime {
     intent: BehaviorIntent,
     manifest: PetManifest,
     current_animation_name: String,
+    /// Edge-trigger guard: set once a one-shot animation reaches its held final
+    /// frame, so the completion signal fires exactly once until the animation
+    /// (re)starts at frame 0.
+    oneshot_held: bool,
     /// Test-only pin: when set, `refresh_behavior_mode` will not overwrite
     /// `current_animation_name`, allowing tests to drive a specific animation.
     #[cfg(test)]
@@ -300,10 +304,10 @@ impl PetRuntime {
             }
             self.frame_elapsed -= frame_duration;
             if one_shot && self.frame_index + 1 >= frame_count {
-                // Final frame has now been shown for its full duration. Hold it;
-                // the owner reacts to the completion signal (advance_animation does NOT
-                // rewrite current_animation_name).
-                completed = true;
+                // Final frame shown for its full duration. Hold it; report completion
+                // exactly once (edge-triggered) until the owner switches animation away.
+                completed = !self.oneshot_held;
+                self.oneshot_held = true;
                 self.frame_elapsed = Duration::ZERO;
                 break;
             }
@@ -474,6 +478,7 @@ impl PetRuntime {
         if is_lifecycle {
             self.frame_index = 0;
             self.frame_elapsed = Duration::ZERO;
+            self.oneshot_held = false;
         }
     }
 
@@ -523,6 +528,7 @@ impl PetRuntime {
             intent: BehaviorIntent::Idle,
             manifest,
             current_animation_name: "idle".to_string(),
+            oneshot_held: false,
             #[cfg(test)]
             pinned_animation_name: None,
         }
@@ -553,6 +559,7 @@ impl PetRuntime {
         self.current_animation_name = name.to_string();
         self.frame_index = 0;
         self.frame_elapsed = Duration::ZERO;
+        self.oneshot_held = false;
     }
 
     #[cfg(test)]
@@ -1246,6 +1253,28 @@ mod tests {
         let t2 = pet.tick(Duration::from_millis(50)); // final frame shown full duration
         assert!(t2.oneshot_completed, "completion should fire after final frame duration");
         assert_eq!(pet.frame_index(), 1, "one-shot holds the last frame (no wrap)");
+    }
+
+    #[test]
+    fn one_shot_completion_does_not_refire_while_held() {
+        use crate::pet::manifest::{Animation, Frame};
+        let success = Animation {
+            frames: vec![
+                Frame { index: 4, ms: Some(50) },
+                Frame { index: 5, ms: Some(50) },
+            ],
+            loop_start: None,
+            fallback: Some("idle".to_string()),
+            one_shot: true,
+        };
+        let mut pet = lifecycle_fixture("success", success);
+        pet.set_current_animation_for_test("success");
+        pet.tick(Duration::from_millis(50)); // -> frame 1
+        let t2 = pet.tick(Duration::from_millis(50)); // completes
+        assert!(t2.oneshot_completed);
+        let t3 = pet.tick(Duration::from_millis(50)); // held; must NOT re-fire
+        assert!(!t3.oneshot_completed);
+        assert_eq!(pet.frame_index(), 1);
     }
 
     #[test]
