@@ -90,7 +90,6 @@ pub struct PetRuntime {
 #[derive(Debug, Clone)]
 struct NotificationState {
     animation_name: String,
-    #[allow(dead_code)] // consumed by TTL countdown in SP4-B Task 6
     remaining: Duration,
     priority: i32,
     #[allow(dead_code)] // carried for logging + SP4-C; not rendered in SP4-B
@@ -286,6 +285,20 @@ impl PetRuntime {
             self.clear_micro_action();
         }
 
+        // Notification TTL counts down in every state (hidden / drag / hover included),
+        // so a stale notification never lingers behind an obscuring state.
+        if let Some(n) = self.notification.as_mut() {
+            n.remaining = n.remaining.saturating_sub(dt);
+        }
+        if self
+            .notification
+            .as_ref()
+            .is_some_and(|n| n.remaining.is_zero())
+        {
+            self.notification = None;
+            self.refresh_behavior_mode();
+        }
+
         if self.hidden {
             self.refresh_behavior_mode();
             return PetTick {
@@ -303,6 +316,14 @@ impl PetRuntime {
         }
 
         let oneshot_completed = self.advance_animation();
+
+        // One-shot notify animation finished -> the notification owner clears itself
+        // (the manifest `fallback` is NOT consulted on the notification path). Ordering
+        // per SP4-A 5.3: advance -> owner consumes -> refresh (the trailing refresh drops Notifying).
+        if oneshot_completed && self.notification.is_some() {
+            self.notification = None;
+        }
+
         if !self.dragging {
             self.advance_state(dt);
         }
@@ -1427,6 +1448,49 @@ mod tests {
         assert_eq!(pet.current_fallback(), "idle");
     }
 
+    fn notify_oneshot_fixture() -> PetRuntime {
+        use crate::pet::manifest::{Animation, Frame, FrameGeometry, PetManifest};
+        use std::collections::BTreeMap;
+        let mut animations = BTreeMap::new();
+        animations.insert("idle".to_string(), Animation::from_indices(&[0, 1, 2, 3]));
+        animations.insert(
+            "notify-running".to_string(),
+            Animation::from_indices(&[4, 5]),
+        );
+        animations.insert(
+            "notify-success".to_string(),
+            Animation {
+                frames: vec![
+                    Frame {
+                        index: 6,
+                        ms: Some(50),
+                    },
+                    Frame {
+                        index: 7,
+                        ms: Some(50),
+                    },
+                ],
+                loop_start: None,
+                fallback: Some("idle".to_string()),
+                one_shot: true,
+            },
+        );
+        let manifest = PetManifest {
+            manifest_version: 1,
+            id: "fixture".into(),
+            display_name: "Fixture".into(),
+            spritesheet_path: "x.png".into(),
+            frame: FrameGeometry {
+                width: 16,
+                height: 16,
+                columns: 8,
+                rows: 1,
+            },
+            animations,
+        };
+        PetRuntime::new_with_manifest(manifest)
+    }
+
     fn notify_fixture() -> PetRuntime {
         use crate::pet::manifest::{Animation, FrameGeometry, PetManifest};
         use std::collections::BTreeMap;
@@ -1540,5 +1604,50 @@ mod tests {
         pet.start_micro_action(crate::micro_action::MicroAction::CheerUp);
         pet.set_notification(&event("running"));
         assert_eq!(pet.behavior_mode(), BehaviorMode::Notifying);
+    }
+
+    #[test]
+    fn ttl_expires_and_clears_notification() {
+        let mut pet = notify_fixture();
+        let mut ev = event("running");
+        ev.ttl_ms = Some(100);
+        pet.set_notification(&ev);
+        pet.tick(Duration::from_millis(60));
+        assert!(pet.notification_animation().is_some());
+        pet.tick(Duration::from_millis(60)); // total 120 > 100
+        assert_eq!(pet.notification_animation(), None);
+    }
+
+    #[test]
+    fn ttl_counts_down_while_hidden() {
+        let mut pet = notify_fixture();
+        let mut ev = event("running");
+        ev.ttl_ms = Some(100);
+        pet.set_notification(&ev);
+        pet.set_hidden(true);
+        pet.tick(Duration::from_millis(120));
+        assert_eq!(
+            pet.notification_animation(),
+            None,
+            "TTL must keep counting while hidden"
+        );
+    }
+
+    #[test]
+    fn one_shot_notification_clears_on_completion_before_ttl() {
+        let mut pet = notify_oneshot_fixture();
+        let mut ev = event("succeeded");
+        ev.animation_name = Some("notify-success".to_string());
+        ev.ttl_ms = Some(60_000); // long TTL; one-shot should end it sooner
+        pet.set_notification(&ev);
+        assert_eq!(pet.current_animation_name(), "notify-success");
+        pet.tick(Duration::from_millis(50)); // frame 0 done
+        let t = pet.tick(Duration::from_millis(50)); // final frame full duration -> completion
+        assert!(t.oneshot_completed);
+        assert_eq!(
+            pet.notification_animation(),
+            None,
+            "one-shot completion clears the notification"
+        );
     }
 }
