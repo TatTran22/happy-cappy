@@ -92,7 +92,7 @@ struct NotificationState {
     animation_name: String,
     remaining: Duration,
     priority: i32,
-    #[allow(dead_code)] // carried for logging + SP4-C; not rendered in SP4-B
+    #[allow(dead_code)] // carried for SP4-C (not rendered in SP4-B)
     label: Option<String>,
     #[allow(dead_code)]
     body: Option<String>,

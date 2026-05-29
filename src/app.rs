@@ -815,6 +815,10 @@ impl DesktopPetApp {
                 self.show_picker_window();
             }
             AppCommand::Notify(event) => {
+                log::info!(
+                    "notification received: kind={:?} label={:?} body={:?} ttl_ms={:?} priority={:?}",
+                    event.kind, event.label, event.body, event.ttl_ms, event.priority
+                );
                 self.pet.set_notification(&event);
                 if let Some(window) = &self.window {
                     window.request_redraw();

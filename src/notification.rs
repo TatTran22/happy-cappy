@@ -63,6 +63,15 @@ pub fn truncate_text(s: &str, cap: usize) -> String {
     s[..end].to_string()
 }
 
+fn truncate_field(field: &str, s: String) -> String {
+    if s.len() > TEXT_MAX_BYTES {
+        log::warn!("notification {field} exceeds {TEXT_MAX_BYTES} bytes; truncating");
+        truncate_text(&s, TEXT_MAX_BYTES)
+    } else {
+        s
+    }
+}
+
 #[derive(Debug)]
 pub enum NotifyParseError {
     TooLong,
@@ -108,8 +117,8 @@ pub fn parse_notify_line(line: &str) -> Result<NotificationEvent, NotifyParseErr
             return Err(NotifyParseError::FieldTooLong("animation_name"));
         }
     }
-    ev.label = ev.label.map(|s| truncate_text(&s, TEXT_MAX_BYTES));
-    ev.body = ev.body.map(|s| truncate_text(&s, TEXT_MAX_BYTES));
+    ev.label = ev.label.map(|s| truncate_field("label", s));
+    ev.body = ev.body.map(|s| truncate_field("body", s));
     Ok(ev)
 }
 
