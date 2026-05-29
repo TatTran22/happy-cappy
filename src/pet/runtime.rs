@@ -78,10 +78,25 @@ pub struct PetRuntime {
     /// frame, so the completion signal fires exactly once until the animation
     /// (re)starts at frame 0.
     oneshot_held: bool,
+    /// Active notification, if any.  Set by `set_notification`, cleared by `clear_notification`.
+    notification: Option<NotificationState>,
     /// Test-only pin: when set, `refresh_behavior_mode` will not overwrite
     /// `current_animation_name`, allowing tests to drive a specific animation.
     #[cfg(test)]
     pinned_animation_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct NotificationState {
+    #[allow(dead_code)] // read via test accessor; used by SP4-B Tasks 5-6
+    animation_name: String,
+    #[allow(dead_code)] // consumed by TTL countdown in SP4-B Task 6
+    remaining: Duration,
+    priority: i32,
+    #[allow(dead_code)] // carried for logging + SP4-C; not rendered in SP4-B
+    label: Option<String>,
+    #[allow(dead_code)]
+    body: Option<String>,
 }
 
 const IDLE_STATE_MS: u64 = 200;
@@ -202,6 +217,56 @@ impl PetRuntime {
     pub fn clear_micro_action(&mut self) {
         self.action_override = None;
         self.refresh_behavior_mode();
+    }
+
+    pub fn set_notification(&mut self, event: &crate::notification::NotificationEvent) {
+        let (default_priority, default_ttl) = crate::notification::preset_for(&event.kind);
+        let priority =
+            crate::notification::clamp_priority(event.priority.unwrap_or(default_priority));
+        let ttl_ms = crate::notification::clamp_ttl(event.ttl_ms.unwrap_or(default_ttl));
+
+        // Preemption: a new notification with LOWER priority than the active one is ignored.
+        if let Some(active) = &self.notification {
+            if priority < active.priority {
+                return;
+            }
+        }
+
+        let requested = event
+            .animation_name
+            .clone()
+            .unwrap_or_else(|| format!("notify-{}", event.kind));
+        let notify_kind = format!("notify-{}", event.kind);
+        let chain: [&str; 5] = [
+            requested.as_str(),
+            notify_kind.as_str(),
+            "notify-message",
+            "notify-running",
+            "idle",
+        ];
+        let (resolved, _) =
+            crate::pet::resolver::lookup_with_fallback_dynamic(&self.manifest, &chain);
+
+        self.notification = Some(NotificationState {
+            animation_name: resolved,
+            remaining: Duration::from_millis(ttl_ms),
+            priority,
+            label: event.label.clone(),
+            body: event.body.clone(),
+        });
+        self.refresh_behavior_mode();
+    }
+
+    pub fn clear_notification(&mut self) {
+        self.notification = None;
+        self.refresh_behavior_mode();
+    }
+
+    #[cfg(test)]
+    pub fn notification_animation(&self) -> Option<&str> {
+        self.notification
+            .as_ref()
+            .map(|n| n.animation_name.as_str())
     }
 
     pub fn turn_around(&mut self) {
@@ -533,6 +598,7 @@ impl PetRuntime {
             manifest,
             current_animation_name: "idle".to_string(),
             oneshot_held: false,
+            notification: None,
             #[cfg(test)]
             pinned_animation_name: None,
         }
@@ -1349,5 +1415,92 @@ mod tests {
         let mut pet = lifecycle_fixture("success", success);
         pet.set_current_animation_for_test("success");
         assert_eq!(pet.current_fallback(), "idle");
+    }
+
+    fn notify_fixture() -> PetRuntime {
+        use crate::pet::manifest::{Animation, FrameGeometry, PetManifest};
+        use std::collections::BTreeMap;
+        let mut animations = BTreeMap::new();
+        animations.insert("idle".to_string(), Animation::from_indices(&[0, 1, 2, 3]));
+        animations.insert(
+            "notify-running".to_string(),
+            Animation::from_indices(&[4, 5]),
+        );
+        animations.insert(
+            "notify-failed".to_string(),
+            Animation::from_indices(&[6, 7]),
+        );
+        let manifest = PetManifest {
+            manifest_version: 1,
+            id: "fixture".into(),
+            display_name: "Fixture".into(),
+            spritesheet_path: "x.png".into(),
+            frame: FrameGeometry {
+                width: 16,
+                height: 16,
+                columns: 8,
+                rows: 1,
+            },
+            animations,
+        };
+        PetRuntime::new_with_manifest(manifest)
+    }
+
+    fn event(kind: &str) -> crate::notification::NotificationEvent {
+        crate::notification::NotificationEvent {
+            kind: kind.to_string(),
+            animation_name: None,
+            label: None,
+            body: None,
+            ttl_ms: None,
+            priority: None,
+        }
+    }
+
+    #[test]
+    fn fresh_runtime_has_no_notification() {
+        // Pet swap builds a fresh runtime (app::activate_pet), so this is the swap-clears invariant.
+        assert_eq!(PetRuntime::new().notification_animation(), None);
+    }
+
+    #[test]
+    fn set_notification_resolves_kind_animation() {
+        let mut pet = notify_fixture();
+        pet.set_notification(&event("running"));
+        assert_eq!(pet.notification_animation(), Some("notify-running"));
+    }
+
+    #[test]
+    fn set_notification_falls_back_when_animation_absent() {
+        let mut pet = notify_fixture(); // has no notify-review
+        pet.set_notification(&event("needs-review"));
+        // chain: notify-review(absent) -> notify-message(absent) -> notify-running(present)
+        assert_eq!(pet.notification_animation(), Some("notify-running"));
+    }
+
+    #[test]
+    fn higher_priority_preempts_lower() {
+        let mut pet = notify_fixture();
+        pet.set_notification(&event("running")); // priority 10
+        pet.set_notification(&event("failed")); // priority 90 -> preempts
+        assert_eq!(pet.notification_animation(), Some("notify-failed"));
+    }
+
+    #[test]
+    fn lower_priority_is_ignored() {
+        let mut pet = notify_fixture();
+        pet.set_notification(&event("failed")); // 90
+        pet.set_notification(&event("running")); // 10 -> ignored
+        assert_eq!(pet.notification_animation(), Some("notify-failed"));
+    }
+
+    #[test]
+    fn explicit_priority_is_clamped() {
+        let mut pet = notify_fixture();
+        let mut ev = event("running");
+        ev.priority = Some(10_000);
+        pet.set_notification(&ev);
+        pet.set_notification(&event("failed")); // 90 < clamped 100 -> ignored
+        assert_eq!(pet.notification_animation(), Some("notify-running"));
     }
 }
