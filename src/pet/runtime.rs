@@ -41,6 +41,7 @@ pub struct PetTick {
     pub state: PetState,
     pub frame_index: usize,
     pub speed_x: f32,
+    pub oneshot_completed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,6 +223,7 @@ impl PetRuntime {
                 state: self.state,
                 frame_index: self.frame_index,
                 speed_x: 0.0,
+                oneshot_completed: false,
             };
         }
 
@@ -231,7 +233,7 @@ impl PetRuntime {
             self.expression_elapsed += dt;
         }
 
-        self.advance_animation();
+        let oneshot_completed = self.advance_animation();
         if !self.dragging {
             self.advance_state(dt);
         }
@@ -251,6 +253,7 @@ impl PetRuntime {
             state: self.state,
             frame_index: self.frame_index,
             speed_x: self.speed_x(),
+            oneshot_completed,
         }
     }
 
@@ -262,6 +265,13 @@ impl PetRuntime {
             .expect("manifest validation guarantees 'idle' exists")
     }
 
+    pub fn current_fallback(&self) -> String {
+        self.current_animation()
+            .fallback
+            .clone()
+            .unwrap_or_else(|| "idle".to_string())
+    }
+
     fn frame_duration_for(&self, pos: usize) -> Duration {
         if let Some(ms) = self.current_animation().frame_ms(pos) {
             Duration::from_millis(ms as u64)
@@ -270,11 +280,16 @@ impl PetRuntime {
         }
     }
 
-    fn advance_animation(&mut self) {
-        let (frame_count, loop_start) = {
+    fn advance_animation(&mut self) -> bool {
+        let (frame_count, loop_start, one_shot) = {
             let anim = self.current_animation();
-            (anim.frame_count().max(1), anim.loop_start.unwrap_or(0))
+            (
+                anim.frame_count().max(1),
+                anim.loop_start.unwrap_or(0),
+                anim.one_shot,
+            )
         };
+        let mut completed = false;
         loop {
             let frame_duration = self.frame_duration_for(self.frame_index);
             if frame_duration.is_zero() {
@@ -284,9 +299,18 @@ impl PetRuntime {
                 break;
             }
             self.frame_elapsed -= frame_duration;
+            if one_shot && self.frame_index + 1 >= frame_count {
+                // Final frame has now been shown for its full duration. Hold it;
+                // the owner reacts to the completion signal (advance_animation does NOT
+                // rewrite current_animation_name).
+                completed = true;
+                self.frame_elapsed = Duration::ZERO;
+                break;
+            }
             let next = self.frame_index + 1;
             self.frame_index = if next >= frame_count { loop_start } else { next };
         }
+        completed
     }
 
     fn advance_state(&mut self, dt: Duration) {
@@ -1198,5 +1222,50 @@ mod tests {
         assert_eq!(pet.frame_index(), 2);
         pet.set_hovered(true);
         assert_eq!(pet.frame_index(), 2); // hover-cheerful is not lifecycle -> preserved
+    }
+
+    #[test]
+    fn one_shot_completion_fires_after_final_frame_full_duration() {
+        use crate::pet::manifest::{Animation, Frame};
+        let success = Animation {
+            frames: vec![
+                Frame { index: 4, ms: Some(50) },
+                Frame { index: 5, ms: Some(50) },
+            ],
+            loop_start: None,
+            fallback: Some("idle".to_string()),
+            one_shot: true,
+        };
+        let mut pet = lifecycle_fixture("success", success);
+        pet.set_current_animation_for_test("success"); // frame 0
+
+        let t1 = pet.tick(Duration::from_millis(50)); // frame 0 done -> frame 1
+        assert_eq!(pet.frame_index(), 1);
+        assert!(!t1.oneshot_completed);
+
+        let t2 = pet.tick(Duration::from_millis(50)); // final frame shown full duration
+        assert!(t2.oneshot_completed, "completion should fire after final frame duration");
+        assert_eq!(pet.frame_index(), 1, "one-shot holds the last frame (no wrap)");
+    }
+
+    #[test]
+    fn looping_animation_never_reports_oneshot_completed() {
+        let mut pet = PetRuntime::new(); // bundled idle, not one-shot
+        let t = pet.tick(Duration::from_millis(200));
+        assert!(!t.oneshot_completed);
+    }
+
+    #[test]
+    fn current_fallback_exposes_manifest_value() {
+        use crate::pet::manifest::{Animation, Frame};
+        let success = Animation {
+            frames: vec![Frame { index: 4, ms: Some(50) }],
+            loop_start: None,
+            fallback: Some("idle".to_string()),
+            one_shot: true,
+        };
+        let mut pet = lifecycle_fixture("success", success);
+        pet.set_current_animation_for_test("success");
+        assert_eq!(pet.current_fallback(), "idle");
     }
 }
