@@ -385,7 +385,7 @@ mod tests {
         assert_eq!(manifest.frame.columns, 4);
         assert_eq!(manifest.frame.rows, 10);
         assert_eq!(manifest.manifest_version, 1);
-        assert_eq!(manifest.animations.len(), 10);
+        assert_eq!(manifest.animations.len(), 15);
         assert_eq!(
             manifest.animations["idle"]
                 .frames
@@ -780,5 +780,21 @@ mod tests {
             r#""idle": { "frames": [{ "index": 0, "ms": 80 }, { "index": 1, "ms": 80 }], "loopStart": 1 }"#,
         );
         assert!(PetManifest::from_json_str(&json).is_ok());
+    }
+
+    #[test]
+    fn bundled_manifest_defines_notify_animations() {
+        let manifest = PetManifest::load_embedded_happy_cappy();
+        for name in [
+            "notify-running",
+            "notify-succeeded",
+            "notify-failed",
+            "notify-needs-review",
+            "notify-message",
+        ] {
+            assert!(manifest.animations.contains_key(name), "missing {name}");
+        }
+        // notify-succeeded is a one-shot celebration.
+        assert!(manifest.animations["notify-succeeded"].one_shot);
     }
 }

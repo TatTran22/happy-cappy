@@ -5,15 +5,22 @@
   "spritesheetPath": "happy_cappy_spritesheet.png",
   "frame": { "width": 64, "height": 64, "columns": 4, "rows": 10 },
   "animations": {
-    "idle":           { "frames": [0,  1,  2,  3] },
-    "blink":          { "frames": [4,  5,  6,  7] },
-    "happy":          { "frames": [8,  9, 10, 11] },
-    "curious":        { "frames": [12, 13, 14, 15] },
-    "sleepy":         { "frames": [16, 17, 18, 19] },
-    "hover-calm":     { "frames": [20, 21, 22, 23] },
-    "hover-cheerful": { "frames": [24, 25, 26, 27] },
-    "hover-lively":   { "frames": [28, 29, 30, 31] },
-    "walk-right":     { "frames": [32, 33, 34, 35] },
-    "drag":           { "frames": [36, 37, 38, 39] }
+    "idle":              { "frames": [0,  1,  2,  3] },
+    "blink":             { "frames": [4,  5,  6,  7] },
+    "happy":             { "frames": [8,  9, 10, 11] },
+    "curious":           { "frames": [12, 13, 14, 15] },
+    "sleepy":            { "frames": [16, 17, 18, 19] },
+    "hover-calm":        { "frames": [20, 21, 22, 23] },
+    "hover-cheerful":    { "frames": [24, 25, 26, 27] },
+    "hover-lively":      { "frames": [28, 29, 30, 31] },
+    "walk-right":        { "frames": [32, 33, 34, 35] },
+    "drag":              { "frames": [36, 37, 38, 39] },
+    "notify-running":    { "frames": [12, 13, 14, 15] },
+    "notify-message":    { "frames": [4, 5, 6, 7] },
+    "notify-succeeded":  { "frames": [{ "index": 8, "ms": 90 }, { "index": 9, "ms": 90 },
+                                      { "index": 10, "ms": 120 }, { "index": 11, "ms": 260 }],
+                           "oneShot": true, "fallback": "idle" },
+    "notify-needs-review": { "frames": [12, 13, 14, 15] },
+    "notify-failed":     { "frames": [16, 17, 18, 19] }
   }
 }
