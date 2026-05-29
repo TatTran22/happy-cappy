@@ -61,6 +61,7 @@ pub enum AppCommand {
     RevealPetsFolder,
     RefreshPetMenu,
     ShowPicker,
+    Notify(crate::notification::NotificationEvent),
 }
 
 #[derive(Debug)]
@@ -812,6 +813,12 @@ impl DesktopPetApp {
             }
             AppCommand::ShowPicker => {
                 self.show_picker_window();
+            }
+            AppCommand::Notify(event) => {
+                self.pet.set_notification(&event);
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
             }
         }
         true
@@ -1570,6 +1577,22 @@ mod tests {
 
         assert_eq!(app.pet.behavior_mode(), crate::pet::BehaviorMode::Action);
         assert_eq!(app.pet.current_animation_name(), "happy");
+    }
+
+    #[test]
+    fn notify_command_enters_notifying_mode() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.settings_path = None;
+        let ev = crate::notification::NotificationEvent {
+            kind: "running".to_string(),
+            animation_name: None,
+            label: None,
+            body: None,
+            ttl_ms: None,
+            priority: None,
+        };
+        assert!(app.handle_non_quit_command_for_test(AppCommand::Notify(ev)));
+        assert_eq!(app.pet.behavior_mode(), crate::pet::BehaviorMode::Notifying);
     }
 
     #[test]
