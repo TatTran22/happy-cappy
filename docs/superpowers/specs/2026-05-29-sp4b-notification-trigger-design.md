@@ -65,8 +65,8 @@ struct NotificationState {
 ### 3.1 Lifecycle (in `tick`)
 
 - Decrement `remaining` by `dt`; when it hits zero, clear the notification.
-- **TTL keeps counting even while a drag/hover override hides the notify animation** (§3.3). It does not pause for interaction — if the pet is dragged for the whole TTL, the notification expires in the background and nothing resumes on release.
-- If the resolved animation is `one_shot` (SP4-A) and the engine reports it **completed** before the TTL elapses, clear the notification immediately (a "success" plays its celebration once and is done). Looping animations run for the full TTL. This consumption follows SP4-A §5.3 ordering: within `tick`, `advance_animation` sets the `oneshot_completed` flag → the notification reads it and clears itself → `refresh_behavior_mode` then re-selects (now no notification → falls back to the behavior chain). The notification is the "owner" that reacts to the signal; `advance_animation` never rewrites the animation name itself.
+- **TTL keeps counting in every state where the notify animation is not shown** — both while a drag/hover override wins (§3.3) **and while the pet is `Hidden`/auto-hidden** (decided). The countdown must run *before* the runtime's existing `if self.hidden { return }` early-return in `tick` (`runtime.rs:215`), in the same place `action_override` already ticks, so a notification never gets stuck un-expiring behind a hidden pet. It never pauses for interaction: if the pet is dragged or hidden for the whole TTL, the notification expires in the background and nothing resumes on release/unhide.
+- If the resolved animation is `one_shot` (SP4-A) and the engine reports it **completed** before the TTL elapses, **clear the notification** immediately (a "success" plays its celebration once and is done). The manifest `fallback` field is **not consulted on the notification path** — clearing returns control to the behavior chain (→ idle/Default), which is the desired "after success" state; pinning `fallback` until TTL would just freeze the pet. Looping animations run for the full TTL. This consumption follows SP4-A §5.3 ordering: within `tick`, `advance_animation` sets the `oneshot_completed` flag → the notification reads it and clears itself → `refresh_behavior_mode` then re-selects (now no notification → behavior chain). The notification is the "owner" that reacts to the signal; `advance_animation` never rewrites the animation name itself.
 - Producers extend a long-running state by re-sending (see preemption: equal priority = latest-wins, which resets the TTL).
 
 ### 3.1a Animation cursor reset
@@ -96,6 +96,10 @@ Hidden > Dragging > Hovered > Notifying > Action(micro) > Walking > Default
 - Dragging/hovering takes over immediately (shows drag/hover animation); when interaction ends, if TTL remains the notify animation resumes (restarting from frame 0 per §3.1a).
 - Notification preempts micro-actions (Nap/CheerUp) and walking/idle.
 - The `Notifying` branch **does not** call `resolve_animation_chain` (which returns `&'static [&'static str]` and cannot carry `animation_name`/`format!("notify-{kind}")`). Instead `refresh_behavior_mode`, when in `Notifying`, **pins** the notification's animation by calling the dynamic helper (§2, §9) directly with the runtime chain and using its returned `String`. The static `resolve_animation_chain` stays unchanged for every other mode.
+
+### 3.4 Pet swap clears the notification (decided)
+
+Activating a different pet (picker Apply or menu quick-swap) replaces the `PetRuntime` (the existing `activate_pet` path). The new runtime starts with `notification: None` — i.e. **switching pets clears any active notification**. We do not migrate or re-resolve the notification against the new pet's manifest: the new pet may define different (or no) `notify-*` animations, and re-resolving would add cross-manifest state-carrying complexity for no real benefit. A producer that still cares re-sends; the next event resolves cleanly against the new manifest.
 
 ## 4. Transport: Unix socket + `notify` CLI (single binary)
 
@@ -143,7 +147,9 @@ The bundled spritesheet is full (40 frames, all assigned), so `notify-*` animati
 ## 6. Error handling & input bounds
 
 - **Bounded reads:** the server reads at most **64 KiB** for a single event line; a longer line is rejected (drop + `warn!`), so a misbehaving client can't exhaust memory. Read uses a length-limited reader, not unbounded `read_to_string`.
-- **Field caps:** `kind` ≤ 64 bytes; `label`/`body` ≤ 1 KiB each; `animation_name` ≤ 64 bytes. Over-length fields are truncated with a `warn!` (not a hard error — the event still fires).
+- **Field caps (UTF-8-safe):** never byte-slice a `String` blindly (slicing mid-codepoint panics).
+  - **Identifiers** — `kind` ≤ 64 bytes, `animation_name` ≤ 64 bytes: an over-length value **rejects the whole event** (`warn!` + drop). Over-length identifiers signal a bug/abuse, not user text.
+  - **Free text** — `label`/`body` ≤ 1 KiB each: truncated at the **largest UTF-8 char boundary ≤ the cap** (`warn!`, event still fires). The truncation routine walks `char_indices()` to the last boundary within the cap — it must not panic on multi-byte input (covered by a test with multi-byte UTF-8 at the boundary).
 - **TTL bounds:** `ttl_ms` clamped to `[1 ms, 24 h]`; absent → preset default (§2).
 - **Priority clamp:** `priority` clamped to `[0, 100]` (§2) before comparison.
 - Malformed socket line / JSON → log a `warn!`, drop that line, keep the `accept()` loop alive. A bad event never crashes the pet.
@@ -153,10 +159,11 @@ The bundled spritesheet is full (40 frames, all assigned), so `notify-*` animati
 
 ## 7. Testing
 
-- **Model (pure):** kind → default priority/TTL; `animation_name` override; TTL countdown + expiry; **TTL keeps ticking while a drag/hover override is active** (expires in background); one-shot completion clears early; preemption (higher replaces, equal latest-wins, lower ignored) using clamped priority.
+- **Model (pure):** kind → default priority/TTL; `animation_name` override; TTL countdown + expiry; **TTL keeps ticking while a drag/hover override is active AND while `Hidden`** (expires in background, no resume on unhide); one-shot completion **clears the notification without consulting `fallback`**; preemption (higher replaces, equal latest-wins, lower ignored) using clamped priority.
+- **Pet swap:** activating a different pet (replacing the runtime) leaves `notification == None` — an active notification does not survive the swap.
 - **Resolution chain:** known kind → `notify-<kind>`; unknown kind still tries `notify-<kind>` then `notify-message`/`notify-running`/`idle`; explicit `animation_name` takes precedence.
 - **Cursor reset:** setting/replacing a notification resets `frame_index`/`frame_elapsed`; re-entering `Notifying` after a drag/hover override restarts the notify animation from frame 0; the existing `animation_name_change_does_not_reset_frame_index` behavior for non-notification transitions still holds.
-- **Input bounds:** a >64 KiB line is rejected; over-length `kind`/`label`/`body`/`animation_name` truncated; `ttl_ms` clamped to `[1 ms, 24 h]`; `priority` clamped to `[0, 100]`.
+- **Input bounds:** a >64 KiB line is rejected; over-length `kind`/`animation_name` **reject the event**; over-length `label`/`body` are **truncated at a UTF-8 char boundary** — explicit test with a multi-byte char straddling the cap, asserting no panic and a valid `String`; `ttl_ms` clamped to `[1 ms, 24 h]`; `priority` clamped to `[0, 100]`.
 - **`parse_notify_line`:** valid JSON; missing optional fields; invalid JSON; missing required `kind`.
 - **CLI arg parsing (clap):** flag combinations; missing `--kind`; non-numeric `--ttl`/`--priority`.
 - **Socket I/O (integration):** bind via `bind_control_socket` on a `tempfile` socket path, connect a `UnixStream`, send a line, assert the parsed event is delivered.

@@ -121,7 +121,7 @@ advance_animation()      // detect + set oneshot_completed flag (does NOT change
 → refresh_behavior_mode() // re-selects the next animation
 ```
 
-For a **pinned** animation (selected by an override owner, not the behavior chain — introduced by SP4-B's notification), completion drives the transition to `fallback`. For **chain-driven** animations (Default/hover/walk), one-shot/fallback has no effect — the chain re-selects each tick, so only non-one-shot animations are ever chosen that way. one-shot/fallback is therefore meaningful only for pinned/override animations; SP4-A ships the primitive + signal and unit-tests it in isolation.
+For a **pinned** animation (selected by an override owner, not the behavior chain — introduced by SP4-B's notification), the **owner decides** what completion means: it MAY transition to the animation's `fallback`, or take another action entirely. (SP4-B's notification chooses to *clear itself* on completion and does **not** consult `fallback` — see SP4-B §3.1. So `fallback` is the SP4-A engine primitive — exposed and tested here — but has no consumer that applies it within SP4; it remains available for future pinned uses such as an intro-then-loop hand-off.) For **chain-driven** animations (Default/hover/walk), one-shot/fallback has no effect — the chain re-selects each tick, so only non-one-shot animations are ever chosen that way. SP4-A ships the primitive + signal and unit-tests it in isolation.
 
 ### 5.4 Behavior-mode selection & entry-reset policy
 
