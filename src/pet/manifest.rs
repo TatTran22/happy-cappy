@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 const MAX_FRAMES_PER_ANIMATION: usize = 64;
 
@@ -24,6 +24,43 @@ pub struct FrameGeometry {
     pub height: u32,
     pub columns: u32,
     pub rows: u32,
+}
+
+/// One animation frame: a sprite index plus an optional per-frame duration.
+/// Deserializes from either a bare integer (v1: `7`) or an object (v2: `{ "index": 7, "ms": 120 }`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Frame {
+    pub index: u32,
+    /// `None` -> the runtime uses its state/personality-derived duration (v1 parity).
+    pub ms: Option<u32>,
+}
+
+impl From<u32> for Frame {
+    fn from(index: u32) -> Self {
+        Frame { index, ms: None }
+    }
+}
+
+impl<'de> Deserialize<'de> for Frame {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Index(u32),
+            Object {
+                index: u32,
+                #[serde(default)]
+                ms: Option<u32>,
+            },
+        }
+        Ok(match Raw::deserialize(deserializer)? {
+            Raw::Index(index) => Frame { index, ms: None },
+            Raw::Object { index, ms } => Frame { index, ms },
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -515,5 +552,33 @@ mod tests {
 
         let err = PetManifest::from_path(&path).unwrap_err();
         assert!(matches!(err, ManifestError::Io(_)));
+    }
+
+    #[test]
+    fn frame_parses_from_bare_integer() {
+        let f: Frame = serde_json::from_str("7").unwrap();
+        assert_eq!(f.index, 7);
+        assert_eq!(f.ms, None);
+    }
+
+    #[test]
+    fn frame_parses_from_object_with_ms() {
+        let f: Frame = serde_json::from_str(r#"{ "index": 9, "ms": 120 }"#).unwrap();
+        assert_eq!(f.index, 9);
+        assert_eq!(f.ms, Some(120));
+    }
+
+    #[test]
+    fn frame_parses_from_object_without_ms() {
+        let f: Frame = serde_json::from_str(r#"{ "index": 3 }"#).unwrap();
+        assert_eq!(f.index, 3);
+        assert_eq!(f.ms, None);
+    }
+
+    #[test]
+    fn frame_from_u32_has_no_ms() {
+        let f = Frame::from(5u32);
+        assert_eq!(f.index, 5);
+        assert_eq!(f.ms, None);
     }
 }
