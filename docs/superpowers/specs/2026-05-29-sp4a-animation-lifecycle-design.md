@@ -34,7 +34,7 @@ A single `frame` deserializes from **either** a bare integer (v1) or an object (
 // v1 animation — unchanged, still valid:
 "idle": { "frames": [0, 1, 2, 3] },
 
-// v2 animation — per-frame ms + one-shot + fallback:
+// v2 one-shot — per-frame ms, plays once, then enters `fallback`:
 "notify-success": {
   "frames": [
     { "index": 8,  "ms": 80 },
@@ -43,8 +43,14 @@ A single `frame` deserializes from **either** a bare integer (v1) or an object (
     { "index": 11, "ms": 300 }
   ],
   "oneShot": true,        // play once, then switch to `fallback`
-  "fallback": "idle",     // animation to enter when a one-shot completes (default: "idle")
-  "loopStart": 0          // (looping animations) frame to loop back to after the last frame
+  "fallback": "idle"      // animation to enter when a one-shot completes (default: "idle")
+},
+
+// v2 looping with intro — frames 0..2 play once, then loop 2..len forever:
+"notify-running": {
+  "frames": [{ "index": 12, "ms": 120 }, { "index": 13, "ms": 120 },
+             { "index": 14, "ms": 120 }, { "index": 15, "ms": 120 }],
+  "loopStart": 2          // mutually exclusive with `oneShot` (see validation)
 }
 ```
 
@@ -52,8 +58,9 @@ Rust types:
 
 ```rust
 #[derive(Debug, Clone, Deserialize)]
-pub struct Animation {
-    pub frames: Vec<Frame>,
+#[serde(rename_all = "camelCase")]   // REQUIRED: parent PetManifest's rename_all does NOT
+pub struct Animation {                // propagate to nested structs, so loopStart/oneShot
+    pub frames: Vec<Frame>,           // must be mapped here explicitly.
     #[serde(default)]
     pub loop_start: Option<usize>,
     #[serde(default)]
@@ -71,6 +78,7 @@ pub struct Frame {
 
 - `Frame` custom/untagged `Deserialize`: a JSON number → `Frame { index, ms: None }`; a JSON object `{ "index", "ms"? }` → `Frame { index, ms }`.
 - `loop_start`, `fallback`, `one_shot` are all optional with defaults that preserve current behavior (`None`, `None`, `false`).
+- `one_shot` and `loop_start` are **mutually exclusive** (a one-shot does not loop) — setting both is a validation error (see below).
 - The existing `Animation { frames: Vec<u32> }` callers (`current_sprite_index`, `advance_animation`, resolver fixtures, picker preview) switch from `frames: Vec<u32>` to `frames: Vec<Frame>`; sprite index is read via `frame.index`.
 
 ### Validation (extends existing `validate()`)
@@ -80,6 +88,7 @@ Keep all current checks (non-empty, `MAX_FRAMES_PER_ANIMATION`, sprite index bou
 - `loop_start`, when present, must be `< frames.len()`.
 - `fallback`, when present, must name an animation that exists in the manifest **or** be `"idle"` (which is guaranteed present). An unresolved `fallback` is a validation error.
 - `ms`, when present, must be `> 0`.
+- `one_shot == true` together with a present `loop_start` is a validation error (mutually exclusive).
 
 ## 5. Runtime semantics (`src/pet/runtime.rs`)
 
@@ -111,14 +120,14 @@ A non-`one_shot` animation never auto-transitions; it loops per §5.2.
 
 ## 6. Error handling
 
-- Manifest parse/validation errors use the existing `ManifestError` enum, extended with variants for: `LoopStartOutOfBounds`, `UnresolvedFallback { animation, fallback }`, `ZeroFrameDuration { animation, frame_pos }`.
+- Manifest parse/validation errors use the existing `ManifestError` enum, extended with variants for: `LoopStartOutOfBounds`, `UnresolvedFallback { animation, fallback }`, `ZeroFrameDuration { animation, frame_pos }`, `OneShotWithLoopStart { animation }`.
 - The bundled manifest is validated at load (`load_embedded_happy_cappy` already `expect`s a valid manifest); the new checks apply there too.
 - Custom-pet manifests that fail v2 validation flow through the existing SP2 `CatalogLoadError` path (skipped + surfaced), no new error surface.
 
 ## 7. Testing (pure Rust, no AppKit)
 
 - **Parse:** bare-int frames; object frames; mixed bare+object in one animation; `loopStart`/`fallback`/`oneShot` present and absent; defaults applied.
-- **Validation failures:** `loop_start >= len`; unresolved `fallback`; `ms == 0`; plus all existing checks still pass.
+- **Validation failures:** `loop_start >= len`; unresolved `fallback`; `ms == 0`; `oneShot` + `loopStart` together; plus all existing checks still pass.
 - **Runtime timing:** an animation with per-frame `ms` advances at exactly those durations; an animation without `ms` uses runtime-computed durations.
 - **loop_start:** after the last frame, index returns to `loop_start`, not 0.
 - **one_shot:** plays each frame once, then `current_animation_name` becomes `fallback` (or `idle`), and the completion signal fires exactly once.
