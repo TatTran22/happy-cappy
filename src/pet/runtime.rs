@@ -73,6 +73,10 @@ pub struct PetRuntime {
     intent: BehaviorIntent,
     manifest: PetManifest,
     current_animation_name: String,
+    /// Test-only pin: when set, `refresh_behavior_mode` will not overwrite
+    /// `current_animation_name`, allowing tests to drive a specific animation.
+    #[cfg(test)]
+    pinned_animation_name: Option<String>,
 }
 
 const IDLE_STATE_MS: u64 = 200;
@@ -250,17 +254,29 @@ impl PetRuntime {
         }
     }
 
-    fn advance_animation(&mut self) {
-        let frame_count = self
-            .manifest
+    fn current_animation(&self) -> &crate::pet::manifest::Animation {
+        self.manifest
             .animations
             .get(&self.current_animation_name)
             .or_else(|| self.manifest.animations.get("idle"))
             .expect("manifest validation guarantees 'idle' exists")
-            .frame_count()
-            .max(1);
-        let frame_duration = self.frame_duration();
-        while self.frame_elapsed >= frame_duration {
+    }
+
+    fn frame_duration_for(&self, pos: usize) -> Duration {
+        if let Some(ms) = self.current_animation().frame_ms(pos) {
+            Duration::from_millis(ms as u64)
+        } else {
+            self.frame_duration()
+        }
+    }
+
+    fn advance_animation(&mut self) {
+        let frame_count = self.current_animation().frame_count().max(1);
+        loop {
+            let frame_duration = self.frame_duration_for(self.frame_index);
+            if self.frame_elapsed < frame_duration {
+                break;
+            }
             self.frame_elapsed -= frame_duration;
             self.frame_index = (self.frame_index + 1) % frame_count;
         }
@@ -394,6 +410,12 @@ impl PetRuntime {
             BehaviorMode::Default
         };
 
+        #[cfg(test)]
+        if let Some(ref pinned) = self.pinned_animation_name {
+            self.current_animation_name = pinned.clone();
+            return;
+        }
+
         let chain = resolve_animation_chain(
             self.behavior_mode,
             self.personality,
@@ -450,6 +472,8 @@ impl PetRuntime {
             intent: BehaviorIntent::Idle,
             manifest,
             current_animation_name: "idle".to_string(),
+            #[cfg(test)]
+            pinned_animation_name: None,
         }
     }
 
@@ -470,6 +494,20 @@ impl PetRuntime {
             PetState::Idle | PetState::Sleep => 0.0,
         };
         self.refresh_behavior_mode();
+    }
+
+    #[cfg(test)]
+    pub fn set_current_animation_for_test(&mut self, name: &str) {
+        self.pinned_animation_name = Some(name.to_string());
+        self.current_animation_name = name.to_string();
+        self.frame_index = 0;
+        self.frame_elapsed = Duration::ZERO;
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)] // used by a later task
+    pub fn replace_animation_for_test(&mut self, name: &str, animation: crate::pet::manifest::Animation) {
+        self.manifest.animations.insert(name.to_string(), animation);
     }
 }
 
@@ -1009,5 +1047,43 @@ mod tests {
 
         assert_eq!(pet.manifest().id, "custom");
         assert_eq!(pet.frame_size(), (32, 48));
+    }
+
+    fn lifecycle_fixture(anim_name: &str, animation: crate::pet::manifest::Animation) -> PetRuntime {
+        use crate::pet::manifest::{Animation, FrameGeometry, PetManifest};
+        use std::collections::BTreeMap;
+        let mut animations = BTreeMap::new();
+        animations.insert("idle".to_string(), Animation::from_indices(&[0, 1, 2, 3]));
+        animations.insert(anim_name.to_string(), animation);
+        let manifest = PetManifest {
+            manifest_version: 1,
+            id: "fixture".into(),
+            display_name: "Fixture".into(),
+            spritesheet_path: "x.png".into(),
+            frame: FrameGeometry { width: 16, height: 16, columns: 8, rows: 1 },
+            animations,
+        };
+        PetRuntime::new_with_manifest(manifest)
+    }
+
+    #[test]
+    fn per_frame_ms_overrides_runtime_timing() {
+        use crate::pet::manifest::{Animation, Frame};
+        let timed = Animation {
+            frames: vec![
+                Frame { index: 0, ms: Some(50) },
+                Frame { index: 1, ms: Some(50) },
+            ],
+            loop_start: None,
+            fallback: None,
+            one_shot: false,
+        };
+        let mut pet = lifecycle_fixture("idle2", timed);
+        pet.set_current_animation_for_test("idle2");
+
+        pet.tick(Duration::from_millis(50));
+        assert_eq!(pet.frame_index(), 1);
+        pet.tick(Duration::from_millis(50));
+        assert_eq!(pet.frame_index(), 0); // wrapped (2 frames)
     }
 }
