@@ -57,7 +57,7 @@ mod tests {
     fn fixture_manifest(animation_names: &[&str]) -> PetManifest {
         let mut animations = BTreeMap::new();
         for name in animation_names {
-            animations.insert((*name).to_string(), Animation { frames: vec![0] });
+            animations.insert((*name).to_string(), Animation::from_indices(&[0]));
         }
         PetManifest {
             manifest_version: 1,

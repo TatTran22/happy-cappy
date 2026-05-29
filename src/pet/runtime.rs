@@ -127,7 +127,7 @@ impl PetRuntime {
             .get(&self.current_animation_name)
             .or_else(|| self.manifest.animations.get("idle"))
             .expect("manifest validation guarantees 'idle' exists");
-        anim.frames[self.frame_index % anim.frames.len()]
+        anim.sprite_index(self.frame_index)
     }
 
     pub fn frame_size(&self) -> (u32, u32) {
@@ -257,8 +257,7 @@ impl PetRuntime {
             .get(&self.current_animation_name)
             .or_else(|| self.manifest.animations.get("idle"))
             .expect("manifest validation guarantees 'idle' exists")
-            .frames
-            .len()
+            .frame_count()
             .max(1);
         let frame_duration = self.frame_duration();
         while self.frame_elapsed >= frame_duration {
@@ -952,9 +951,7 @@ mod tests {
         let mut animations = BTreeMap::new();
         animations.insert(
             "idle".to_string(),
-            Animation {
-                frames: vec![0, 1, 2, 3, 4, 5],
-            },
+            Animation::from_indices(&[0, 1, 2, 3, 4, 5]),
         );
         let manifest = PetManifest {
             manifest_version: 1,
@@ -992,9 +989,7 @@ mod tests {
         let mut animations = BTreeMap::new();
         animations.insert(
             "idle".to_string(),
-            Animation {
-                frames: vec![0, 1, 2, 3],
-            },
+            Animation::from_indices(&[0, 1, 2, 3]),
         );
         let manifest = PetManifest {
             manifest_version: 1,

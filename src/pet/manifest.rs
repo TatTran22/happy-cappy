@@ -64,8 +64,48 @@ impl<'de> Deserialize<'de> for Frame {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Animation {
-    pub frames: Vec<u32>,
+    pub frames: Vec<Frame>,
+    #[serde(default)]
+    pub loop_start: Option<usize>,
+    #[serde(default)]
+    pub fallback: Option<String>,
+    #[serde(default)]
+    pub one_shot: bool,
+}
+
+impl Animation {
+    /// Build a plain v1-style animation (no per-frame ms, no lifecycle fields). For tests/fixtures.
+    pub fn from_indices(indices: &[u32]) -> Self {
+        Animation {
+            frames: indices.iter().copied().map(Frame::from).collect(),
+            loop_start: None,
+            fallback: None,
+            one_shot: false,
+        }
+    }
+
+    pub fn frame_count(&self) -> usize {
+        self.frames.len()
+    }
+
+    /// Sprite index at `pos` (wraps defensively so it never panics).
+    pub fn sprite_index(&self, pos: usize) -> u32 {
+        let len = self.frames.len().max(1);
+        self.frames[pos % len].index
+    }
+
+    /// Per-frame duration override at `pos`, if the manifest specified one.
+    pub fn frame_ms(&self, pos: usize) -> Option<u32> {
+        let len = self.frames.len().max(1);
+        self.frames.get(pos % len).and_then(|f| f.ms)
+    }
+
+    /// A "lifecycle" animation drives its own cursor (intro/one-shot) and must start at frame 0 on entry.
+    pub fn is_lifecycle(&self) -> bool {
+        self.one_shot || self.loop_start.is_some()
+    }
 }
 
 fn default_manifest_version() -> u32 {
@@ -238,12 +278,12 @@ impl PetManifest {
                     count: anim.frames.len(),
                 });
             }
-            for (pos, index) in anim.frames.iter().enumerate() {
-                if *index >= max_index {
+            for (pos, frame) in anim.frames.iter().enumerate() {
+                if frame.index >= max_index {
                     return Err(ManifestError::SpriteIndexOutOfBounds {
                         animation: name.clone(),
                         frame_pos: pos,
-                        index: *index,
+                        index: frame.index,
                         max: max_index,
                     });
                 }
@@ -274,12 +314,18 @@ mod tests {
         assert_eq!(manifest.frame.rows, 10);
         assert_eq!(manifest.manifest_version, 1);
         assert_eq!(manifest.animations.len(), 10);
-        assert_eq!(manifest.animations["idle"].frames, vec![0, 1, 2, 3]);
         assert_eq!(
-            manifest.animations["walk-right"].frames,
+            manifest.animations["idle"].frames.iter().map(|f| f.index).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3]
+        );
+        assert_eq!(
+            manifest.animations["walk-right"].frames.iter().map(|f| f.index).collect::<Vec<_>>(),
             vec![32, 33, 34, 35]
         );
-        assert_eq!(manifest.animations["drag"].frames, vec![36, 37, 38, 39]);
+        assert_eq!(
+            manifest.animations["drag"].frames.iter().map(|f| f.index).collect::<Vec<_>>(),
+            vec![36, 37, 38, 39]
+        );
     }
 
     fn minimal_valid_json() -> String {
@@ -529,7 +575,10 @@ mod tests {
 
         let manifest = PetManifest::from_path(&path).unwrap();
         assert_eq!(manifest.id, "test");
-        assert_eq!(manifest.animations["idle"].frames, vec![0, 1, 2, 3]);
+        assert_eq!(
+            manifest.animations["idle"].frames.iter().map(|f| f.index).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3]
+        );
     }
 
     #[test]

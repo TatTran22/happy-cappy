@@ -1646,9 +1646,7 @@ mod tests {
         let mut animations = BTreeMap::new();
         animations.insert(
             "idle".to_string(),
-            Animation {
-                frames: vec![0, 1, 2, 3],
-            },
+            Animation::from_indices(&[0, 1, 2, 3]),
         );
         let bundled = BundledPet {
             manifest: PetManifest {
