@@ -271,7 +271,10 @@ impl PetRuntime {
     }
 
     fn advance_animation(&mut self) {
-        let frame_count = self.current_animation().frame_count().max(1);
+        let (frame_count, loop_start) = {
+            let anim = self.current_animation();
+            (anim.frame_count().max(1), anim.loop_start.unwrap_or(0))
+        };
         loop {
             let frame_duration = self.frame_duration_for(self.frame_index);
             if frame_duration.is_zero() {
@@ -281,7 +284,8 @@ impl PetRuntime {
                 break;
             }
             self.frame_elapsed -= frame_duration;
-            self.frame_index = (self.frame_index + 1) % frame_count;
+            let next = self.frame_index + 1;
+            self.frame_index = if next >= frame_count { loop_start } else { next };
         }
     }
 
@@ -426,7 +430,27 @@ impl PetRuntime {
             self.action_override.map(|a| a.action()),
         );
         let (name, _) = lookup_with_fallback(&self.manifest, chain);
+        self.set_selected_animation(name);
+    }
+
+    /// Set the current animation name, resetting the cursor when entering a
+    /// "lifecycle" animation (loopStart/oneShot) so its intro/one-shot starts at frame 0.
+    /// Non-lifecycle name changes preserve the cursor (existing parity behavior).
+    fn set_selected_animation(&mut self, name: &str) {
+        if name == self.current_animation_name {
+            return;
+        }
+        let is_lifecycle = self
+            .manifest
+            .animations
+            .get(name)
+            .map(|a| a.is_lifecycle())
+            .unwrap_or(false);
         self.current_animation_name = name.to_string();
+        if is_lifecycle {
+            self.frame_index = 0;
+            self.frame_elapsed = Duration::ZERO;
+        }
     }
 
     fn expression_interval(&self) -> Duration {
@@ -510,6 +534,16 @@ impl PetRuntime {
     #[cfg(test)]
     pub fn replace_animation_for_test(&mut self, name: &str, animation: crate::pet::manifest::Animation) {
         self.manifest.animations.insert(name.to_string(), animation);
+    }
+
+    #[cfg(test)]
+    pub fn set_expression_index_for_test(&mut self, idx: usize) {
+        self.expression_index = idx;
+    }
+
+    #[cfg(test)]
+    pub fn refresh_behavior_mode_for_test(&mut self) {
+        self.refresh_behavior_mode();
     }
 }
 
@@ -1109,5 +1143,60 @@ mod tests {
         // If the guard were missing this would loop forever; reaching the asserts proves it returns.
         pet.tick(Duration::from_millis(100));
         assert_eq!(pet.frame_index(), 0);
+    }
+
+    #[test]
+    fn loop_start_wraps_to_intro_boundary_not_zero() {
+        use crate::pet::manifest::{Animation, Frame};
+        let looping = Animation {
+            frames: vec![
+                Frame { index: 0, ms: Some(50) },
+                Frame { index: 1, ms: Some(50) },
+                Frame { index: 2, ms: Some(50) },
+            ],
+            loop_start: Some(1),
+            fallback: None,
+            one_shot: false,
+        };
+        let mut pet = lifecycle_fixture("loopy", looping);
+        pet.set_current_animation_for_test("loopy"); // cursor at 0
+        pet.tick(Duration::from_millis(50)); // -> 1
+        pet.tick(Duration::from_millis(50)); // -> 2
+        assert_eq!(pet.frame_index(), 2);
+        pet.tick(Duration::from_millis(50)); // past last -> loop_start (1), not 0
+        assert_eq!(pet.frame_index(), 1);
+    }
+
+    #[test]
+    fn entering_lifecycle_animation_resets_cursor() {
+        use crate::pet::manifest::{Animation, Frame};
+        // Default-mode expression slot 2 selects "happy"; make "happy" a lifecycle anim.
+        let happy = Animation {
+            frames: vec![Frame { index: 5, ms: None }, Frame { index: 6, ms: None }],
+            loop_start: Some(1),
+            fallback: None,
+            one_shot: false,
+        };
+        let mut pet = lifecycle_fixture("happy", happy);
+        // Advance idle a couple frames so frame_index != 0.
+        pet.tick(Duration::from_millis(200));
+        pet.tick(Duration::from_millis(200));
+        assert_ne!(pet.frame_index(), 0);
+        // Force selection of the lifecycle "happy" animation via the real chain path.
+        pet.set_expression_index_for_test(2);
+        pet.refresh_behavior_mode_for_test();
+        assert_eq!(pet.current_animation_name(), "happy");
+        assert_eq!(pet.frame_index(), 0); // entry-reset fired
+    }
+
+    #[test]
+    fn entering_non_lifecycle_animation_preserves_cursor() {
+        // Parity guard: switching to a plain animation keeps the cursor.
+        let mut pet = PetRuntime::new();
+        pet.force_state_for_test(PetState::Walk);
+        pet.tick(Duration::from_millis(250));
+        assert_eq!(pet.frame_index(), 2);
+        pet.set_hovered(true);
+        assert_eq!(pet.frame_index(), 2); // hover-cheerful is not lifecycle -> preserved
     }
 }
