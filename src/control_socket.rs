@@ -3,6 +3,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
+use log::warn;
+use winit::event_loop::EventLoopProxy;
+
+use crate::app::AppCommand;
 use crate::notification::{parse_notify_line, NotificationEvent, MAX_LINE_BYTES};
 
 #[derive(Debug)]
@@ -70,6 +74,24 @@ pub fn send_notify(path: &Path, event: &NotificationEvent) -> std::io::Result<()
     let mut json = serde_json::to_string(event).expect("NotificationEvent serializes");
     json.push('\n');
     stream.write_all(json.as_bytes())
+}
+
+/// Spawn a background thread that accepts connections and forwards parsed
+/// events into the winit loop. The thread only ever *sends* events.
+pub fn spawn_listener(listener: UnixListener, proxy: EventLoopProxy<AppCommand>) {
+    std::thread::spawn(move || {
+        for incoming in listener.incoming() {
+            match incoming {
+                Ok(stream) => match read_event(stream) {
+                    Ok(event) => {
+                        let _ = proxy.send_event(AppCommand::Notify(event));
+                    }
+                    Err(e) => warn!("control socket: dropping bad event line: {e}"),
+                },
+                Err(e) => warn!("control socket: accept error: {e}"),
+            }
+        }
+    });
 }
 
 #[cfg(test)]
