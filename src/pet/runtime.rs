@@ -1650,4 +1650,37 @@ mod tests {
             "one-shot completion clears the notification"
         );
     }
+
+    #[test]
+    fn dev_agent_flow_running_then_succeeded_transitions_animation() {
+        // Generic dev-agent flow on the bundled pet: a "build" goes running -> succeeded.
+        // No agent-specific names appear in the core; only generic kinds + the notify-<kind> convention.
+        let mut pet = PetRuntime::new(); // bundled manifest with notify-* animations
+
+        pet.set_notification(&event("running"));
+        assert_eq!(pet.behavior_mode(), BehaviorMode::Notifying);
+        assert_eq!(pet.current_animation_name(), "notify-running");
+
+        // "succeeded" (priority 30) preempts the active "running" (priority 10) and resolves
+        // to the one-shot notify-succeeded via the notify-<kind> convention (no explicit animation_name).
+        pet.set_notification(&event("succeeded"));
+        assert_eq!(pet.current_animation_name(), "notify-succeeded");
+
+        // One tick long enough to play the whole one-shot (90+90+120+260 = 560 ms).
+        let t = pet.tick(Duration::from_millis(1000));
+        assert!(
+            t.oneshot_completed,
+            "one-shot should complete within the tick"
+        );
+        assert_eq!(
+            pet.notification_animation(),
+            None,
+            "completion clears the notification (before its 8s TTL)"
+        );
+        assert_ne!(
+            pet.behavior_mode(),
+            BehaviorMode::Notifying,
+            "behavior chain resumes after completion"
+        );
+    }
 }
