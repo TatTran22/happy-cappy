@@ -1,6 +1,7 @@
 pub mod app;
 pub mod bundle;
 pub mod command_target_macos;
+pub mod control_socket;
 pub mod interaction;
 pub mod menu_bar;
 pub mod micro_action;
