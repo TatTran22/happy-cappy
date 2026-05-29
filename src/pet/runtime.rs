@@ -312,7 +312,11 @@ impl PetRuntime {
                 break;
             }
             let next = self.frame_index + 1;
-            self.frame_index = if next >= frame_count { loop_start } else { next };
+            self.frame_index = if next >= frame_count {
+                loop_start
+            } else {
+                next
+            };
         }
         completed
     }
@@ -563,7 +567,11 @@ impl PetRuntime {
     }
 
     #[cfg(test)]
-    pub fn replace_animation_for_test(&mut self, name: &str, animation: crate::pet::manifest::Animation) {
+    pub fn replace_animation_for_test(
+        &mut self,
+        name: &str,
+        animation: crate::pet::manifest::Animation,
+    ) {
         self.manifest.animations.insert(name.to_string(), animation);
     }
 
@@ -1092,10 +1100,7 @@ mod tests {
         use std::collections::BTreeMap;
 
         let mut animations = BTreeMap::new();
-        animations.insert(
-            "idle".to_string(),
-            Animation::from_indices(&[0, 1, 2, 3]),
-        );
+        animations.insert("idle".to_string(), Animation::from_indices(&[0, 1, 2, 3]));
         let manifest = PetManifest {
             manifest_version: 1,
             id: "custom".to_string(),
@@ -1116,7 +1121,10 @@ mod tests {
         assert_eq!(pet.frame_size(), (32, 48));
     }
 
-    fn lifecycle_fixture(anim_name: &str, animation: crate::pet::manifest::Animation) -> PetRuntime {
+    fn lifecycle_fixture(
+        anim_name: &str,
+        animation: crate::pet::manifest::Animation,
+    ) -> PetRuntime {
         use crate::pet::manifest::{Animation, FrameGeometry, PetManifest};
         use std::collections::BTreeMap;
         let mut animations = BTreeMap::new();
@@ -1127,7 +1135,12 @@ mod tests {
             id: "fixture".into(),
             display_name: "Fixture".into(),
             spritesheet_path: "x.png".into(),
-            frame: FrameGeometry { width: 16, height: 16, columns: 8, rows: 1 },
+            frame: FrameGeometry {
+                width: 16,
+                height: 16,
+                columns: 8,
+                rows: 1,
+            },
             animations,
         };
         PetRuntime::new_with_manifest(manifest)
@@ -1138,8 +1151,14 @@ mod tests {
         use crate::pet::manifest::{Animation, Frame};
         let timed = Animation {
             frames: vec![
-                Frame { index: 0, ms: Some(50) },
-                Frame { index: 1, ms: Some(50) },
+                Frame {
+                    index: 0,
+                    ms: Some(50),
+                },
+                Frame {
+                    index: 1,
+                    ms: Some(50),
+                },
             ],
             loop_start: None,
             fallback: None,
@@ -1163,7 +1182,10 @@ mod tests {
         pet.replace_animation_for_test(
             "zero",
             Animation {
-                frames: vec![Frame { index: 0, ms: Some(0) }],
+                frames: vec![Frame {
+                    index: 0,
+                    ms: Some(0),
+                }],
                 loop_start: None,
                 fallback: None,
                 one_shot: false,
@@ -1181,9 +1203,18 @@ mod tests {
         use crate::pet::manifest::{Animation, Frame};
         let looping = Animation {
             frames: vec![
-                Frame { index: 0, ms: Some(50) },
-                Frame { index: 1, ms: Some(50) },
-                Frame { index: 2, ms: Some(50) },
+                Frame {
+                    index: 0,
+                    ms: Some(50),
+                },
+                Frame {
+                    index: 1,
+                    ms: Some(50),
+                },
+                Frame {
+                    index: 2,
+                    ms: Some(50),
+                },
             ],
             loop_start: Some(1),
             fallback: None,
@@ -1236,8 +1267,14 @@ mod tests {
         use crate::pet::manifest::{Animation, Frame};
         let success = Animation {
             frames: vec![
-                Frame { index: 4, ms: Some(50) },
-                Frame { index: 5, ms: Some(50) },
+                Frame {
+                    index: 4,
+                    ms: Some(50),
+                },
+                Frame {
+                    index: 5,
+                    ms: Some(50),
+                },
             ],
             loop_start: None,
             fallback: Some("idle".to_string()),
@@ -1251,8 +1288,15 @@ mod tests {
         assert!(!t1.oneshot_completed);
 
         let t2 = pet.tick(Duration::from_millis(50)); // final frame shown full duration
-        assert!(t2.oneshot_completed, "completion should fire after final frame duration");
-        assert_eq!(pet.frame_index(), 1, "one-shot holds the last frame (no wrap)");
+        assert!(
+            t2.oneshot_completed,
+            "completion should fire after final frame duration"
+        );
+        assert_eq!(
+            pet.frame_index(),
+            1,
+            "one-shot holds the last frame (no wrap)"
+        );
     }
 
     #[test]
@@ -1260,8 +1304,14 @@ mod tests {
         use crate::pet::manifest::{Animation, Frame};
         let success = Animation {
             frames: vec![
-                Frame { index: 4, ms: Some(50) },
-                Frame { index: 5, ms: Some(50) },
+                Frame {
+                    index: 4,
+                    ms: Some(50),
+                },
+                Frame {
+                    index: 5,
+                    ms: Some(50),
+                },
             ],
             loop_start: None,
             fallback: Some("idle".to_string()),
@@ -1288,7 +1338,10 @@ mod tests {
     fn current_fallback_exposes_manifest_value() {
         use crate::pet::manifest::{Animation, Frame};
         let success = Animation {
-            frames: vec![Frame { index: 4, ms: Some(50) }],
+            frames: vec![Frame {
+                index: 4,
+                ms: Some(50),
+            }],
             loop_start: None,
             fallback: Some("idle".to_string()),
             one_shot: true,

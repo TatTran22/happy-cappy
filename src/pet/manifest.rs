@@ -184,18 +184,25 @@ impl fmt::Display for ManifestError {
             Self::MissingRequiredAnimation { name } => {
                 write!(f, "manifest is missing required animation '{name}'")
             }
-            Self::LoopStartOutOfBounds { animation, loop_start, frames } => write!(
+            Self::LoopStartOutOfBounds {
+                animation,
+                loop_start,
+                frames,
+            } => write!(
                 f,
                 "animation '{animation}' loopStart {loop_start} >= frame count {frames}"
             ),
-            Self::UnresolvedFallback { animation, fallback } => write!(
+            Self::UnresolvedFallback {
+                animation,
+                fallback,
+            } => write!(
                 f,
                 "animation '{animation}' fallback '{fallback}' is not a defined animation"
             ),
-            Self::ZeroFrameDuration { animation, frame_pos } => write!(
-                f,
-                "animation '{animation}' frame[{frame_pos}] has ms = 0"
-            ),
+            Self::ZeroFrameDuration {
+                animation,
+                frame_pos,
+            } => write!(f, "animation '{animation}' frame[{frame_pos}] has ms = 0"),
             Self::OneShotWithLoopStart { animation } => write!(
                 f,
                 "animation '{animation}' sets both oneShot and loopStart (mutually exclusive)"
@@ -380,15 +387,27 @@ mod tests {
         assert_eq!(manifest.manifest_version, 1);
         assert_eq!(manifest.animations.len(), 10);
         assert_eq!(
-            manifest.animations["idle"].frames.iter().map(|f| f.index).collect::<Vec<_>>(),
+            manifest.animations["idle"]
+                .frames
+                .iter()
+                .map(|f| f.index)
+                .collect::<Vec<_>>(),
             vec![0, 1, 2, 3]
         );
         assert_eq!(
-            manifest.animations["walk-right"].frames.iter().map(|f| f.index).collect::<Vec<_>>(),
+            manifest.animations["walk-right"]
+                .frames
+                .iter()
+                .map(|f| f.index)
+                .collect::<Vec<_>>(),
             vec![32, 33, 34, 35]
         );
         assert_eq!(
-            manifest.animations["drag"].frames.iter().map(|f| f.index).collect::<Vec<_>>(),
+            manifest.animations["drag"]
+                .frames
+                .iter()
+                .map(|f| f.index)
+                .collect::<Vec<_>>(),
             vec![36, 37, 38, 39]
         );
     }
@@ -649,7 +668,11 @@ mod tests {
         let manifest = PetManifest::from_path(&path).unwrap();
         assert_eq!(manifest.id, "test");
         assert_eq!(
-            manifest.animations["idle"].frames.iter().map(|f| f.index).collect::<Vec<_>>(),
+            manifest.animations["idle"]
+                .frames
+                .iter()
+                .map(|f| f.index)
+                .collect::<Vec<_>>(),
             vec![0, 1, 2, 3]
         );
     }
@@ -708,14 +731,20 @@ mod tests {
     fn rejects_loop_start_out_of_bounds() {
         let json = manifest_json(r#""idle": { "frames": [0, 1], "loopStart": 5 }"#);
         let err = PetManifest::from_json_str(&json).unwrap_err();
-        assert!(matches!(err, ManifestError::LoopStartOutOfBounds { .. }), "{err:?}");
+        assert!(
+            matches!(err, ManifestError::LoopStartOutOfBounds { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]
     fn rejects_unresolved_fallback() {
         let json = manifest_json(r#""idle": { "frames": [0], "fallback": "nope" }"#);
         let err = PetManifest::from_json_str(&json).unwrap_err();
-        assert!(matches!(err, ManifestError::UnresolvedFallback { .. }), "{err:?}");
+        assert!(
+            matches!(err, ManifestError::UnresolvedFallback { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -728,14 +757,21 @@ mod tests {
     fn rejects_zero_frame_duration() {
         let json = manifest_json(r#""idle": { "frames": [{ "index": 0, "ms": 0 }] }"#);
         let err = PetManifest::from_json_str(&json).unwrap_err();
-        assert!(matches!(err, ManifestError::ZeroFrameDuration { .. }), "{err:?}");
+        assert!(
+            matches!(err, ManifestError::ZeroFrameDuration { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]
     fn rejects_one_shot_with_loop_start() {
-        let json = manifest_json(r#""idle": { "frames": [0, 1], "oneShot": true, "loopStart": 1 }"#);
+        let json =
+            manifest_json(r#""idle": { "frames": [0, 1], "oneShot": true, "loopStart": 1 }"#);
         let err = PetManifest::from_json_str(&json).unwrap_err();
-        assert!(matches!(err, ManifestError::OneShotWithLoopStart { .. }), "{err:?}");
+        assert!(
+            matches!(err, ManifestError::OneShotWithLoopStart { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]

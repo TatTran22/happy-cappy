@@ -1644,10 +1644,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
 
         let mut animations = BTreeMap::new();
-        animations.insert(
-            "idle".to_string(),
-            Animation::from_indices(&[0, 1, 2, 3]),
-        );
+        animations.insert("idle".to_string(), Animation::from_indices(&[0, 1, 2, 3]));
         let bundled = BundledPet {
             manifest: PetManifest {
                 manifest_version: 1,
