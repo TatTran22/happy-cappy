@@ -21,6 +21,7 @@ pub enum BehaviorMode {
     Dragging,
     Walking,
     Hidden,
+    Notifying,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,7 +89,6 @@ pub struct PetRuntime {
 
 #[derive(Debug, Clone)]
 struct NotificationState {
-    #[allow(dead_code)] // read via test accessor; used by SP4-B Tasks 5-6
     animation_name: String,
     #[allow(dead_code)] // consumed by TTL countdown in SP4-B Task 6
     remaining: Duration,
@@ -506,6 +506,8 @@ impl PetRuntime {
             BehaviorMode::Dragging
         } else if self.hovered {
             BehaviorMode::Hovered
+        } else if self.notification.is_some() {
+            BehaviorMode::Notifying
         } else if self.action_override.is_some() {
             BehaviorMode::Action
         } else if self.state == PetState::Walk && self.movement_enabled() {
@@ -517,6 +519,14 @@ impl PetRuntime {
         #[cfg(test)]
         if let Some(ref pinned) = self.pinned_animation_name {
             self.current_animation_name = pinned.clone();
+            return;
+        }
+
+        // Notifying pins the name resolved once in set_notification (no re-resolution here).
+        if self.behavior_mode == BehaviorMode::Notifying {
+            if let Some(name) = self.notification.as_ref().map(|n| n.animation_name.clone()) {
+                self.set_selected_animation(&name);
+            }
             return;
         }
 
@@ -1502,5 +1512,33 @@ mod tests {
         pet.set_notification(&ev);
         pet.set_notification(&event("failed")); // 90 < clamped 100 -> ignored
         assert_eq!(pet.notification_animation(), Some("notify-running"));
+    }
+
+    #[test]
+    fn notifying_pins_resolved_animation() {
+        let mut pet = notify_fixture();
+        pet.set_notification(&event("running"));
+        assert_eq!(pet.behavior_mode(), BehaviorMode::Notifying);
+        assert_eq!(pet.current_animation_name(), "notify-running");
+    }
+
+    #[test]
+    fn drag_and_hover_outrank_notification() {
+        let mut pet = notify_fixture();
+        pet.set_notification(&event("running"));
+        pet.set_hovered(true);
+        assert_ne!(pet.behavior_mode(), BehaviorMode::Notifying);
+        pet.set_hovered(false);
+        assert_eq!(pet.behavior_mode(), BehaviorMode::Notifying); // resumes while TTL remains
+        pet.set_dragging(true);
+        assert_eq!(pet.behavior_mode(), BehaviorMode::Dragging);
+    }
+
+    #[test]
+    fn notification_outranks_micro_action_and_walk() {
+        let mut pet = notify_fixture();
+        pet.start_micro_action(crate::micro_action::MicroAction::CheerUp);
+        pet.set_notification(&event("running"));
+        assert_eq!(pet.behavior_mode(), BehaviorMode::Notifying);
     }
 }

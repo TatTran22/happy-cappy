@@ -985,7 +985,8 @@ impl DesktopPetApp {
             crate::pet::BehaviorMode::Hovered
             | crate::pet::BehaviorMode::Dragging
             | crate::pet::BehaviorMode::Action
-            | crate::pet::BehaviorMode::Walking => TARGET_FRAME_TIME,
+            | crate::pet::BehaviorMode::Walking
+            | crate::pet::BehaviorMode::Notifying => TARGET_FRAME_TIME,
             crate::pet::BehaviorMode::Hidden => Duration::from_secs(5),
             crate::pet::BehaviorMode::Default => match self.pet.state() {
                 PetState::Walk => TARGET_FRAME_TIME,

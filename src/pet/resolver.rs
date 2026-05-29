@@ -22,6 +22,9 @@ pub fn resolve_animation_chain(
             None => &["idle"],
         },
         BehaviorMode::Walking => &["walk-right", "walk", "idle"],
+        // Notifying returns before reaching resolve_animation_chain; this arm
+        // exists only to satisfy exhaustive match requirements.
+        BehaviorMode::Notifying => &["idle"],
         BehaviorMode::Default => match expression_index % 5 {
             0 => &["idle"],
             1 => &["blink", "idle"],
