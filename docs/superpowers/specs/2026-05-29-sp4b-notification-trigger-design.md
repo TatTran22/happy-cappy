@@ -31,8 +31,8 @@ pub struct NotificationEvent {
 |---|---|---|---|---|
 | `running` | `notify-running` | 10 | 180 s | loop |
 | `message` | `notify-message` | 20 | 10 s | loop |
-| `succeeded` | `notify-success` | 30 | 8 s | one-shot |
-| `needs-review` | `notify-review` | 80 | 120 s | loop |
+| `succeeded` | `notify-succeeded` | 30 | 8 s | one-shot |
+| `needs-review` | `notify-needs-review` | 80 | 120 s | loop |
 | `failed` | `notify-failed` | 90 | 30 s | loop |
 | *(unknown)* | `notify-<kind>` (then chain) | 20 | 10 s | loop |
 
@@ -73,7 +73,7 @@ struct NotificationState {
 
 ### 3.1a Animation cursor reset
 
-The runtime intentionally preserves `frame_index` across animation-name changes (enforced by the existing `animation_name_change_does_not_reset_frame_index` test). A `notify-success` one-shot must **not** inherit a mid-cycle cursor, so:
+The runtime intentionally preserves `frame_index` across animation-name changes (enforced by the existing `animation_name_change_does_not_reset_frame_index` test). A `notify-succeeded` one-shot must **not** inherit a mid-cycle cursor, so:
 
 - Setting or replacing a notification (§3.2) **resets the animation cursor** (`frame_index = 0`, `frame_elapsed = 0`) as part of selecting `Notifying`.
 - When a drag/hover override ends and the pet **re-enters** `Notifying` with TTL remaining, the notify animation **restarts from frame 0** (predictable; one-shots always play fully). This reset is scoped to notification entry — the global cursor-preservation behavior for all other transitions is unchanged.
@@ -144,7 +144,7 @@ Flags: `--kind` (required), `--animation`, `--label`, `--body`, `--ttl` (seconds
 
 ## 5. Bundled manifest — add `notify-*` animations
 
-The bundled spritesheet is full (40 frames, all assigned), so `notify-*` animations **reuse existing sprite indices** (no new art) and use SP4-A v2 fields for timing/one-shot. Names to add: `notify-running`, `notify-success` (one-shot), `notify-failed`, `notify-review`, `notify-message`. **Exact frame-index mapping is decided at implementation time.** These are *not* added to the `validate_happy_cappy_required_keys` required list — missing `notify-*` animations fall back per §2.
+The bundled spritesheet is full (40 frames, all assigned), so `notify-*` animations **reuse existing sprite indices** (no new art) and use SP4-A v2 fields for timing/one-shot. Names to add (matching the `notify-<kind>` convention): `notify-running`, `notify-message`, `notify-succeeded` (one-shot), `notify-needs-review`, `notify-failed`. **Exact frame-index mapping is decided at implementation time.** These are *not* added to the `validate_happy_cappy_required_keys` required list — missing `notify-*` animations fall back per §2.
 
 ## 6. Error handling & input bounds
 
