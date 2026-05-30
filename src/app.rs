@@ -153,6 +153,7 @@ pub struct DesktopPetApp {
     menu_bar: Option<MenuBarController>,
     settings_window: Option<SettingsWindowController>,
     picker: Option<crate::picker_window_macos::PickerWindowController>,
+    bubble_window: Option<crate::bubble_window_macos::BubbleWindow>,
     settings: AppSettings,
     settings_path: Option<PathBuf>,
     active_monitor_name: Option<String>,
@@ -194,6 +195,7 @@ impl DesktopPetApp {
             menu_bar: None,
             settings_window: None,
             picker: None,
+            bubble_window: None,
             settings,
             settings_path: default_settings_path().ok(),
             active_monitor_name: None,
@@ -236,6 +238,7 @@ impl DesktopPetApp {
             menu_bar: None,
             settings_window: None,
             picker: None,
+            bubble_window: None,
             settings,
             settings_path: default_settings_path().ok(),
             active_monitor_name: None,
@@ -304,6 +307,7 @@ impl DesktopPetApp {
         ) {
             Ok(renderer) => {
                 self.renderer = Some(renderer);
+                self.bubble_window = crate::bubble_window_macos::BubbleWindow::new(&window);
                 let now = Instant::now();
                 self.last_tick = now;
                 self.next_tick_at = now;
@@ -440,6 +444,39 @@ impl DesktopPetApp {
         if self.effective_window_visible() {
             window.request_redraw();
         }
+        self.sync_bubble();
+    }
+
+    fn sync_bubble(&mut self) {
+        let Some(bubble) = self.bubble_window.as_ref() else {
+            return;
+        };
+        // Visible only when the pet window is visible (Hide / auto-hide hide it;
+        // Focus Mode does NOT — it only toggles passthrough) AND there is text.
+        let content = if self.effective_window_visible() {
+            self.pet.bubble_content()
+        } else {
+            None
+        };
+        let Some(content) = content else {
+            bubble.hide();
+            return;
+        };
+
+        let pet_rect = crate::physics::Rect {
+            min: self.physics.position,
+            max: crate::physics::Vec2 {
+                x: self.physics.position.x + self.physics.size.x,
+                y: self.physics.position.y + self.physics.size.y,
+            },
+        };
+        let visible = self
+            .window
+            .as_ref()
+            .and_then(|w| crate::bubble_window_macos::active_visible_frame_y_down(w))
+            .unwrap_or_else(|| self.physics.bounds.into());
+
+        bubble.update(&content, pet_rect, visible);
     }
 
     fn move_window_to_pet(&self) {
@@ -832,6 +869,7 @@ impl DesktopPetApp {
                     event.kind, event.label, event.body, event.ttl_ms, event.priority
                 );
                 self.pet.set_notification(&event);
+                self.next_tick_at = Instant::now();
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
