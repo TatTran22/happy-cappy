@@ -92,9 +92,8 @@ struct NotificationState {
     animation_name: String,
     remaining: Duration,
     priority: i32,
-    #[allow(dead_code)] // carried for SP4-C (not rendered in SP4-B)
+    kind: String,
     label: Option<String>,
-    #[allow(dead_code)]
     body: Option<String>,
 }
 
@@ -250,6 +249,7 @@ impl PetRuntime {
             animation_name: resolved,
             remaining: Duration::from_millis(ttl_ms),
             priority,
+            kind: event.kind.clone(),
             label: event.label.clone(),
             body: event.body.clone(),
         });
@@ -259,6 +259,39 @@ impl PetRuntime {
     pub fn clear_notification(&mut self) {
         self.notification = None;
         self.refresh_behavior_mode();
+    }
+
+    /// Count the active notification's TTL down by `elapsed` (the TRUE
+    /// wall-clock elapsed since the last frame, NOT the animation-capped `dt`
+    /// passed to `tick`). Clears + refreshes when it reaches zero. SP4-C: this
+    /// keeps a notification's lifetime wall-clock-accurate even while the pet is
+    /// hidden and the frame scheduler is throttled to a coarse interval.
+    pub fn tick_notification(&mut self, elapsed: Duration) {
+        if let Some(n) = self.notification.as_mut() {
+            n.remaining = n.remaining.saturating_sub(elapsed);
+        }
+        if self
+            .notification
+            .as_ref()
+            .is_some_and(|n| n.remaining.is_zero())
+        {
+            self.notification = None;
+            self.refresh_behavior_mode();
+        }
+    }
+
+    /// Time left on the active notification, if any. The frame scheduler clamps
+    /// its next wake to this so a hidden notification expires on time (SP4-C).
+    pub fn notification_remaining(&self) -> Option<Duration> {
+        self.notification.as_ref().map(|n| n.remaining)
+    }
+
+    /// The active notification rendered as bubble content, or `None` when there
+    /// is no notification or it carries no displayable text (SP4-C). Read-only:
+    /// it does not touch animation, the countdown, or preemption.
+    pub fn bubble_content(&self) -> Option<crate::bubble::BubbleContent> {
+        let n = self.notification.as_ref()?;
+        crate::bubble::BubbleContent::from_parts(&n.kind, n.label.as_deref(), n.body.as_deref())
     }
 
     #[cfg(test)]
@@ -283,20 +316,6 @@ impl PetRuntime {
             .is_some_and(|action| action.tick(dt))
         {
             self.clear_micro_action();
-        }
-
-        // Notification TTL counts down in every state (hidden / drag / hover included),
-        // so a stale notification never lingers behind an obscuring state.
-        if let Some(n) = self.notification.as_mut() {
-            n.remaining = n.remaining.saturating_sub(dt);
-        }
-        if self
-            .notification
-            .as_ref()
-            .is_some_and(|n| n.remaining.is_zero())
-        {
-            self.notification = None;
-            self.refresh_behavior_mode();
         }
 
         if self.hidden {
@@ -1531,6 +1550,21 @@ mod tests {
         }
     }
 
+    fn event_text(
+        kind: &str,
+        label: Option<&str>,
+        body: Option<&str>,
+    ) -> crate::notification::NotificationEvent {
+        crate::notification::NotificationEvent {
+            kind: kind.to_string(),
+            animation_name: None,
+            label: label.map(str::to_string),
+            body: body.map(str::to_string),
+            ttl_ms: None,
+            priority: None,
+        }
+    }
+
     #[test]
     fn fresh_runtime_has_no_notification() {
         // Pet swap builds a fresh runtime (app::activate_pet), so this is the swap-clears invariant.
@@ -1612,9 +1646,9 @@ mod tests {
         let mut ev = event("running");
         ev.ttl_ms = Some(100);
         pet.set_notification(&ev);
-        pet.tick(Duration::from_millis(60));
+        pet.tick_notification(Duration::from_millis(60));
         assert!(pet.notification_animation().is_some());
-        pet.tick(Duration::from_millis(60)); // total 120 > 100
+        pet.tick_notification(Duration::from_millis(60)); // total 120 > 100
         assert_eq!(pet.notification_animation(), None);
     }
 
@@ -1625,7 +1659,7 @@ mod tests {
         ev.ttl_ms = Some(100);
         pet.set_notification(&ev);
         pet.set_hidden(true);
-        pet.tick(Duration::from_millis(120));
+        pet.tick_notification(Duration::from_millis(120));
         assert_eq!(
             pet.notification_animation(),
             None,
@@ -1682,5 +1716,50 @@ mod tests {
             BehaviorMode::Notifying,
             "behavior chain resumes after completion"
         );
+    }
+
+    #[test]
+    fn notification_remaining_reports_time_left() {
+        let mut pet = notify_fixture();
+        let mut ev = event("running");
+        ev.ttl_ms = Some(100);
+        pet.set_notification(&ev);
+        assert_eq!(
+            pet.notification_remaining(),
+            Some(Duration::from_millis(100))
+        );
+        pet.tick_notification(Duration::from_millis(40));
+        assert_eq!(
+            pet.notification_remaining(),
+            Some(Duration::from_millis(60))
+        );
+    }
+
+    #[test]
+    fn no_notification_has_no_remaining_and_no_bubble() {
+        let pet = notify_fixture();
+        assert_eq!(pet.notification_remaining(), None);
+        assert_eq!(pet.bubble_content(), None);
+    }
+
+    #[test]
+    fn bubble_content_none_when_notification_has_no_text() {
+        let mut pet = notify_fixture();
+        pet.set_notification(&event("running")); // label/body both None
+        assert_eq!(pet.bubble_content(), None);
+    }
+
+    #[test]
+    fn bubble_content_carries_text_and_accent() {
+        let mut pet = notify_fixture();
+        pet.set_notification(&event_text(
+            "failed",
+            Some("Build failed"),
+            Some("3 errors"),
+        ));
+        let c = pet.bubble_content().expect("text present -> Some");
+        assert_eq!(c.title.as_deref(), Some("Build failed"));
+        assert_eq!(c.body.as_deref(), Some("3 errors"));
+        assert_eq!(c.accent, crate::bubble::BubbleAccent::Failed);
     }
 }
