@@ -1,4 +1,5 @@
 pub mod app;
+pub mod bubble;
 pub mod bundle;
 pub mod command_target_macos;
 pub mod control_socket;
