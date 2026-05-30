@@ -91,5 +91,7 @@ Manual smoke checklist:
 - Disable Focus Mode from the menu bar; confirm hover, drag, and right-click work again.
 - Trigger Nap; confirm the pet switches to a sleepy expression and stops walking temporarily.
 - Trigger Cheer Up; confirm the pet switches to a happy expression temporarily.
+- Run: ./'dist/Happy Cappy.app/Contents/MacOS/happy-cappy' notify --kind needs-review --label "Cần bạn duyệt" --body "2 file đang chờ review trong nhánh main"
+  Expect: a warm light speech bubble appears ABOVE the pet (tail pointing down), within the screen, with an amber dot. Drag the pet near the top edge -> bubble flips below (tail up). Drag near a side edge -> bubble clamps inside the screen. Enable Focus Mode -> bubble stays visible. Hide the pet (menu) -> bubble disappears.
 - Record results in: $RECORD_RESULTS_PATH
 CHECKLIST
