@@ -93,6 +93,16 @@ fn inner_size_for(frame: (u32, u32), scale: u32) -> LogicalSize<f64> {
     LogicalSize::new((frame.0 * scale) as f64, (frame.1 * scale) as f64)
 }
 
+/// Clamp a base frame-scheduler interval so the loop never sleeps past an
+/// active notification's expiry (SP4-C). Without this, a hidden pet (which
+/// ticks every 5s) would notice expiry up to 5s late.
+fn bounded_tick_interval(base: Duration, notification_remaining: Option<Duration>) -> Duration {
+    match notification_remaining {
+        Some(remaining) => base.min(remaining),
+        None => base,
+    }
+}
+
 fn build_startup_catalog() -> (PetCatalog, PathBuf) {
     use crate::pet::manifest::PetManifest;
     use crate::settings::custom_pets_dir;
@@ -388,7 +398,8 @@ impl DesktopPetApp {
             return;
         };
 
-        let dt = now.duration_since(self.last_tick).min(MAX_TICK_DELTA);
+        let true_elapsed = now.duration_since(self.last_tick);
+        let dt = true_elapsed.min(MAX_TICK_DELTA);
         self.last_tick = now;
 
         // Poll workspace state. Owned WorkspaceTick releases the &mut observer borrow,
@@ -419,6 +430,7 @@ impl DesktopPetApp {
         }
 
         let tick = self.pet.tick(dt);
+        self.pet.tick_notification(true_elapsed);
         self.physics.velocity.x = tick.speed_x;
         let physics_step = self.physics.update(dt.as_secs_f32());
         if tick.state == PetState::Walk && physics_step.bounced_x {
@@ -983,28 +995,28 @@ impl DesktopPetApp {
             .settings_window
             .as_ref()
             .is_some_and(|w| w.is_visible());
-        if settings_visible {
-            return Duration::from_millis(500);
-        }
-        if !self.pet_visible {
-            return Duration::from_secs(5);
-        }
-        if self.auto_hidden {
-            return Duration::from_millis(500);
-        }
-        match self.pet.behavior_mode() {
-            crate::pet::BehaviorMode::Hovered
-            | crate::pet::BehaviorMode::Dragging
-            | crate::pet::BehaviorMode::Action
-            | crate::pet::BehaviorMode::Walking
-            | crate::pet::BehaviorMode::Notifying => TARGET_FRAME_TIME,
-            crate::pet::BehaviorMode::Hidden => Duration::from_secs(5),
-            crate::pet::BehaviorMode::Default => match self.pet.state() {
-                PetState::Walk => TARGET_FRAME_TIME,
-                PetState::Idle => IDLE_FRAME_TIME,
-                PetState::Sleep => SLEEP_FRAME_TIME,
-            },
-        }
+        let base = if settings_visible {
+            Duration::from_millis(500)
+        } else if !self.pet_visible {
+            Duration::from_secs(5)
+        } else if self.auto_hidden {
+            Duration::from_millis(500)
+        } else {
+            match self.pet.behavior_mode() {
+                crate::pet::BehaviorMode::Hovered
+                | crate::pet::BehaviorMode::Dragging
+                | crate::pet::BehaviorMode::Action
+                | crate::pet::BehaviorMode::Walking
+                | crate::pet::BehaviorMode::Notifying => TARGET_FRAME_TIME,
+                crate::pet::BehaviorMode::Hidden => Duration::from_secs(5),
+                crate::pet::BehaviorMode::Default => match self.pet.state() {
+                    PetState::Walk => TARGET_FRAME_TIME,
+                    PetState::Idle => IDLE_FRAME_TIME,
+                    PetState::Sleep => SLEEP_FRAME_TIME,
+                },
+            }
+        };
+        bounded_tick_interval(base, self.pet.notification_remaining())
     }
 
     fn draw(&mut self) {
@@ -1783,6 +1795,24 @@ mod tests {
         app.refresh_catalog();
         assert!(!app.catalog.entries().is_empty());
         assert!(app.catalog.entries().len() >= initial_entry_count);
+    }
+
+    #[test]
+    fn bounded_tick_interval_clamps_to_notification_remaining() {
+        use std::time::Duration;
+        let base = Duration::from_secs(5);
+        // No notification -> unchanged.
+        assert_eq!(bounded_tick_interval(base, None), base);
+        // Remaining shorter than base -> clamp to remaining (wake on time).
+        assert_eq!(
+            bounded_tick_interval(base, Some(Duration::from_millis(800))),
+            Duration::from_millis(800)
+        );
+        // Remaining longer than base -> keep base.
+        assert_eq!(
+            bounded_tick_interval(base, Some(Duration::from_secs(60))),
+            base
+        );
     }
 }
 
