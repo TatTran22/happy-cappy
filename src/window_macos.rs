@@ -77,6 +77,42 @@ pub fn set_pet_window_mouse_passthrough(
     Ok(())
 }
 
+pub fn left_mouse_button_is_down() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSEvent;
+
+        NSEvent::pressedMouseButtons() & 1 != 0
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
+pub fn global_mouse_position_y_down(primary_display_height: f32) -> Option<crate::physics::Vec2> {
+    if !primary_display_height.is_finite() || primary_display_height <= 0.0 {
+        return None;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSEvent;
+
+        let point = NSEvent::mouseLocation();
+        Some(crate::physics::Vec2 {
+            x: point.x as f32,
+            y: crate::workspace::cocoa_to_quartz_y(point.y as f32, primary_display_height),
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
 #[cfg(not(target_os = "macos"))]
 fn apply_platform_window_behavior(_window: &Window) -> Result<(), WindowTweaksError> {
     Ok(())

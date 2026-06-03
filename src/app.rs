@@ -19,7 +19,7 @@ use crate::{
     menu_bar::MenuBarController,
     micro_action::MicroAction,
     pet::{BundledPet, Direction, PetCatalog, PetRuntime, PetState},
-    physics::{Bounds, Physics, Vec2},
+    physics::{Bounds, Physics, Rect, Vec2},
     renderer::PetRenderer,
     settings::{default_settings_path, AppSettings, SettingsError},
     settings_window_macos::SettingsWindowController,
@@ -30,6 +30,7 @@ use crate::{
 pub const WINDOW_SCALE: u32 = 2;
 
 const TARGET_FRAME_TIME: Duration = Duration::from_millis(16);
+const DRAG_FRAME_TIME: Duration = Duration::from_millis(8);
 const IDLE_FRAME_TIME: Duration = Duration::from_millis(200);
 const SLEEP_FRAME_TIME: Duration = Duration::from_millis(500);
 const MAX_TICK_DELTA: Duration = Duration::from_secs(1);
@@ -160,6 +161,8 @@ pub struct DesktopPetApp {
     pet_visible: bool,
     auto_hidden: bool,
     interaction: InteractionState,
+    drag_session: Option<DragSession>,
+    display_set: Option<crate::display::DisplaySet>,
     last_cursor_local_position: Option<Vec2>,
     last_cursor_screen_position: Option<Vec2>,
     workspace_observer: crate::workspace::WorkspaceObserver,
@@ -167,6 +170,11 @@ pub struct DesktopPetApp {
     event_proxy: EventLoopProxy<AppCommand>,
     #[cfg(test)]
     event_proxy: Option<EventLoopProxy<AppCommand>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct DragSession {
+    anchor: Vec2,
 }
 
 impl DesktopPetApp {
@@ -202,6 +210,8 @@ impl DesktopPetApp {
             pet_visible: true,
             auto_hidden: false,
             interaction: InteractionState::default(),
+            drag_session: None,
+            display_set: None,
             last_cursor_local_position: None,
             last_cursor_screen_position: None,
             workspace_observer: crate::workspace::WorkspaceObserver::new(),
@@ -245,6 +255,8 @@ impl DesktopPetApp {
             pet_visible: true,
             auto_hidden: false,
             interaction: InteractionState::default(),
+            drag_session: None,
+            display_set: None,
             last_cursor_local_position: None,
             last_cursor_screen_position: None,
             workspace_observer: crate::workspace::WorkspaceObserver::new(),
@@ -350,6 +362,23 @@ impl DesktopPetApp {
     }
 
     fn update_bounds_from_window(&mut self, event_loop: &ActiveEventLoop) {
+        let active_point = Some(self.pet_center());
+        if let Some(mut display_set) = crate::display::display_set_from_screens(active_point) {
+            let display = Self::selected_display_for(
+                &display_set,
+                self.settings.monitor_behavior,
+                self.physics.position,
+                self.physics.size,
+            )
+            .clone();
+            display_set.active = display.clone();
+            let primary_height = display_set.primary_height();
+            self.display_set = Some(display_set);
+            self.apply_active_display(display, primary_height);
+            self.physics.clamp_to_bounds();
+            return;
+        }
+
         let current_monitor = self
             .window
             .as_ref()
@@ -396,6 +425,50 @@ impl DesktopPetApp {
         self.physics.clamp_to_bounds();
     }
 
+    fn pet_center(&self) -> Vec2 {
+        Vec2 {
+            x: self.physics.position.x + self.physics.size.x * 0.5,
+            y: self.physics.position.y + self.physics.size.y * 0.5,
+        }
+    }
+
+    fn selected_display_for(
+        display_set: &crate::display::DisplaySet,
+        monitor_behavior: crate::settings::MonitorBehavior,
+        position: Vec2,
+        size: Vec2,
+    ) -> &crate::display::DisplaySnapshot {
+        match monitor_behavior {
+            crate::settings::MonitorBehavior::PrimaryDisplay => &display_set.primary,
+            crate::settings::MonitorBehavior::CurrentDisplay => {
+                crate::display::display_containing_rect_center(&display_set.all, position, size)
+                    .unwrap_or(&display_set.active)
+            }
+        }
+    }
+
+    fn apply_active_display(
+        &mut self,
+        display: crate::display::DisplaySnapshot,
+        primary_display_height: f32,
+    ) {
+        self.active_monitor_name = display.name.clone();
+        self.physics.bounds = crate::display::bounds_from_rect(display.frame);
+
+        let scale_factor = self
+            .window
+            .as_ref()
+            .map(|window| window.scale_factor())
+            .unwrap_or(1.0) as f32;
+        self.workspace_observer
+            .set_active_display(Some(crate::workspace::DisplayInfo {
+                name: display.name,
+                bounds_logical: display.frame,
+                scale_factor,
+                primary_display_height,
+            }));
+    }
+
     fn tick(&mut self, now: Instant) {
         let Some(window) = self.window.as_ref().map(Arc::clone) else {
             self.last_tick = now;
@@ -435,10 +508,15 @@ impl DesktopPetApp {
 
         let tick = self.pet.tick(dt);
         self.pet.tick_notification(true_elapsed);
-        self.physics.velocity.x = tick.speed_x;
-        let physics_step = self.physics.update(dt.as_secs_f32());
-        if tick.state == PetState::Walk && physics_step.bounced_x {
-            self.pet.turn_around();
+        if self.interaction.is_dragging() {
+            self.reconcile_drag_with_system_mouse_state();
+            self.physics.velocity.x = 0.0;
+        } else {
+            self.physics.velocity.x = tick.speed_x;
+            let physics_step = self.physics.update(dt.as_secs_f32());
+            if tick.state == PetState::Walk && physics_step.bounced_x {
+                self.pet.turn_around();
+            }
         }
         self.move_window_to_pet();
         if self.effective_window_visible() {
@@ -514,6 +592,7 @@ impl DesktopPetApp {
             y: fh as f32 * settings.scale,
         };
 
+        self.adopt_persisted_display(&settings);
         let had_restored_position = settings.last_position.is_some();
         if let Some(position) =
             settings.restored_position_for_display(self.active_monitor_name.as_deref())
@@ -540,6 +619,33 @@ impl DesktopPetApp {
         self.sync_menu_bar();
         self.move_window_to_pet();
         self.sync_window_passthrough();
+    }
+
+    fn adopt_persisted_display(&mut self, settings: &AppSettings) {
+        let Some(display_name) = settings
+            .last_position
+            .as_ref()
+            .and_then(|position| position.display_name.as_deref())
+        else {
+            return;
+        };
+        let Some(display_set) = self.display_set.as_ref() else {
+            return;
+        };
+        let Some(display) = display_set
+            .all
+            .iter()
+            .find(|display| display.name.as_deref() == Some(display_name))
+            .cloned()
+        else {
+            return;
+        };
+
+        let primary_height = display_set.primary_height();
+        let mut updated_set = display_set.clone();
+        updated_set.active = display.clone();
+        self.display_set = Some(updated_set);
+        self.apply_active_display(display, primary_height);
     }
 
     #[allow(dead_code)]
@@ -751,6 +857,7 @@ impl DesktopPetApp {
 
     fn clear_interaction_state(&mut self) {
         self.interaction = InteractionState::default();
+        self.drag_session = None;
         self.pet.set_hovered(false);
         self.pet.set_dragging(false);
         self.last_cursor_local_position = None;
@@ -1041,8 +1148,8 @@ impl DesktopPetApp {
             Duration::from_millis(500)
         } else {
             match self.pet.behavior_mode() {
+                crate::pet::BehaviorMode::Dragging => DRAG_FRAME_TIME,
                 crate::pet::BehaviorMode::Hovered
-                | crate::pet::BehaviorMode::Dragging
                 | crate::pet::BehaviorMode::Action
                 | crate::pet::BehaviorMode::Walking
                 | crate::pet::BehaviorMode::Notifying => TARGET_FRAME_TIME,
@@ -1119,26 +1226,142 @@ impl DesktopPetApp {
         cursor_screen_position_for_window(self.physics.position, local_logical)
     }
 
+    fn start_drag_session(&mut self, pointer: Vec2) {
+        self.drag_session = Some(DragSession {
+            anchor: Vec2 {
+                x: pointer.x - self.physics.position.x,
+                y: pointer.y - self.physics.position.y,
+            },
+        });
+        self.next_tick_at = Instant::now();
+    }
+
+    fn update_drag_position(&mut self, pointer: Vec2) {
+        let Some(session) = self.drag_session else {
+            return;
+        };
+
+        let desired = Vec2 {
+            x: pointer.x - session.anchor.x,
+            y: pointer.y - session.anchor.y,
+        };
+        self.physics.position =
+            crate::display::clamp_position_to_rect(desired, self.physics.size, self.drag_bounds());
+        self.move_window_to_pet();
+        self.sync_bubble();
+    }
+
+    fn finish_drag_session(&mut self, pointer: Vec2) {
+        self.update_drag_position(pointer);
+        self.drag_session = None;
+        self.adopt_landing_display(pointer);
+        self.physics.clamp_to_bounds();
+        self.move_window_to_pet();
+        self.persist_current_position();
+    }
+
+    fn drag_bounds(&self) -> Rect {
+        let Some(display_set) = self.display_set.as_ref() else {
+            return self.physics.bounds.into();
+        };
+        match self.settings.monitor_behavior {
+            crate::settings::MonitorBehavior::CurrentDisplay => display_set.union,
+            crate::settings::MonitorBehavior::PrimaryDisplay => display_set.primary.frame,
+        }
+    }
+
+    fn adopt_landing_display(&mut self, pointer: Vec2) {
+        let Some(display_set) = self.display_set.as_ref() else {
+            return;
+        };
+        let display = match self.settings.monitor_behavior {
+            crate::settings::MonitorBehavior::PrimaryDisplay => display_set.primary.clone(),
+            crate::settings::MonitorBehavior::CurrentDisplay => {
+                crate::display::display_containing_rect_center(
+                    &display_set.all,
+                    self.physics.position,
+                    self.physics.size,
+                )
+                .or_else(|| crate::display::display_containing_point(&display_set.all, pointer))
+                .cloned()
+                .unwrap_or_else(|| display_set.active.clone())
+            }
+        };
+        let primary_height = display_set.primary_height();
+        let mut updated_set = display_set.clone();
+        updated_set.active = display.clone();
+        self.display_set = Some(updated_set);
+        self.apply_active_display(display, primary_height);
+    }
+
+    fn reconcile_drag_with_system_mouse_state(&mut self) {
+        if !self.interaction.is_dragging() {
+            return;
+        }
+        let left_mouse_down = crate::window_macos::left_mouse_button_is_down();
+        self.update_drag_from_system_state(left_mouse_down, self.current_global_cursor_position());
+    }
+
+    fn update_drag_from_system_state(&mut self, left_mouse_down: bool, pointer: Option<Vec2>) {
+        if !self.interaction.is_dragging() {
+            return;
+        }
+        let pointer = pointer
+            .or(self.last_cursor_screen_position)
+            .unwrap_or(self.physics.position);
+        if left_mouse_down {
+            self.update_drag_position(pointer);
+        } else {
+            self.reconcile_drag_button_state(false, pointer);
+        }
+    }
+
+    fn reconcile_drag_button_state(&mut self, left_mouse_down: bool, pointer: Vec2) {
+        if left_mouse_down || !self.interaction.is_dragging() {
+            return;
+        }
+        let events = self
+            .interaction
+            .mouse_released(pointer, MouseButtonKind::Left, false);
+        self.handle_interaction_events(events);
+    }
+
+    fn current_global_cursor_position(&self) -> Option<Vec2> {
+        let primary_height = self
+            .display_set
+            .as_ref()
+            .map(|display_set| display_set.primary_height())
+            .or({
+                if self.physics.bounds.min_y == 0.0 {
+                    Some(self.physics.bounds.max_y)
+                } else {
+                    None
+                }
+            })?;
+        crate::window_macos::global_mouse_position_y_down(primary_height)
+    }
+
     fn handle_interaction_events(&mut self, events: Vec<InteractionEvent>) {
         for event in events {
             match event {
                 InteractionEvent::HoverChanged(hovered) => {
                     self.pet.set_hovered(hovered);
                 }
-                InteractionEvent::DragStarted { .. } => {
+                InteractionEvent::DragStarted { pointer } => {
+                    self.start_drag_session(pointer);
                     self.pet.set_dragging(true);
                 }
                 InteractionEvent::DragMoved { delta } => {
-                    self.physics.position.x += delta.x;
-                    self.physics.position.y += delta.y;
-                    self.physics.clamp_to_bounds();
-                    self.move_window_to_pet();
+                    if self.drag_session.is_none() {
+                        self.physics.position.x += delta.x;
+                        self.physics.position.y += delta.y;
+                        self.physics.clamp_to_bounds();
+                        self.move_window_to_pet();
+                    }
                 }
-                InteractionEvent::DragEnded { .. } => {
+                InteractionEvent::DragEnded { pointer } => {
                     self.pet.set_dragging(false);
-                    self.physics.clamp_to_bounds();
-                    self.move_window_to_pet();
-                    self.persist_current_position();
+                    self.finish_drag_session(pointer);
                 }
                 InteractionEvent::ContextMenuRequested { .. } => {
                     self.show_context_menu(self.last_cursor_local_position);
@@ -1148,15 +1371,14 @@ impl DesktopPetApp {
     }
 
     fn handle_cursor_left(&mut self) {
+        if self.interaction.is_dragging() {
+            return;
+        }
+
         let screen_logical = self
             .last_cursor_screen_position
             .unwrap_or(self.physics.position);
-        let events = if self.interaction.is_dragging() {
-            self.interaction
-                .mouse_released(screen_logical, MouseButtonKind::Left, false)
-        } else {
-            self.interaction.pointer_moved(screen_logical, false)
-        };
+        let events = self.interaction.pointer_moved(screen_logical, false);
         self.handle_interaction_events(events);
         self.last_cursor_local_position = None;
         self.last_cursor_screen_position = None;
@@ -1215,6 +1437,20 @@ impl DesktopPetApp {
 
     fn handle_non_quit_command_for_test(&mut self, command: AppCommand) -> bool {
         self.handle_non_quit_command(command)
+    }
+
+    fn install_display_set_for_test(&mut self, mut display_set: crate::display::DisplaySet) {
+        let display = Self::selected_display_for(
+            &display_set,
+            self.settings.monitor_behavior,
+            self.physics.position,
+            self.physics.size,
+        )
+        .clone();
+        display_set.active = display.clone();
+        let primary_height = display_set.primary_height();
+        self.display_set = Some(display_set);
+        self.apply_active_display(display, primary_height);
     }
 }
 
@@ -1281,6 +1517,10 @@ impl ApplicationHandler<AppCommand> for DesktopPetApp {
                 let screen_logical = self.cursor_screen_position(local_logical);
                 self.last_cursor_local_position = Some(local_logical);
                 self.last_cursor_screen_position = Some(screen_logical);
+                if self.interaction.is_dragging() {
+                    self.update_drag_position(screen_logical);
+                    return;
+                }
                 let hit = self.current_sprite_hit_test(local_logical);
                 let events = self.interaction.pointer_moved(screen_logical, hit);
                 self.handle_interaction_events(events);
@@ -1414,6 +1654,14 @@ mod tests {
         app.pet.set_hovered(true);
 
         assert_eq!(app.next_tick_interval(), TARGET_FRAME_TIME);
+    }
+
+    #[test]
+    fn dragging_pet_uses_drag_frame_interval() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.pet.set_dragging(true);
+
+        assert_eq!(app.next_tick_interval(), DRAG_FRAME_TIME);
     }
 
     #[test]
@@ -1685,7 +1933,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_left_ends_active_drag_and_clears_cached_positions() {
+    fn cursor_left_during_drag_keeps_drag_active_and_cached_positions() {
         let mut app = DesktopPetApp::new_for_test();
         app.settings_path = None;
         app.physics.position = Vec2 { x: 120.0, y: 90.0 };
@@ -1697,19 +1945,185 @@ mod tests {
             .mouse_pressed(Vec2 { x: 132.0, y: 124.0 }, MouseButtonKind::Left, true);
         app.pet.set_hovered(true);
         app.pet.set_dragging(true);
+        app.start_drag_session(Vec2 { x: 132.0, y: 124.0 });
 
         app.handle_cursor_left();
 
-        assert!(!app.interaction.is_dragging());
-        assert_eq!(app.pet.behavior_mode(), crate::pet::BehaviorMode::Default);
-        assert_eq!(app.last_cursor_local_position, None);
-        assert_eq!(app.last_cursor_screen_position, None);
+        assert!(app.interaction.is_dragging());
+        assert!(app.drag_session.is_some());
+        assert_eq!(app.pet.behavior_mode(), crate::pet::BehaviorMode::Dragging);
+        assert_eq!(
+            app.last_cursor_local_position,
+            Some(Vec2 { x: 12.0, y: 34.0 })
+        );
+        assert_eq!(
+            app.last_cursor_screen_position,
+            Some(Vec2 { x: 132.0, y: 124.0 })
+        );
+        assert_eq!(app.settings.last_position, None);
+    }
+
+    fn rect(min_x: f32, min_y: f32, max_x: f32, max_y: f32) -> Rect {
+        Rect {
+            min: Vec2 { x: min_x, y: min_y },
+            max: Vec2 { x: max_x, y: max_y },
+        }
+    }
+
+    fn display(name: &str, frame: Rect) -> crate::display::DisplaySnapshot {
+        crate::display::DisplaySnapshot {
+            name: Some(name.to_string()),
+            frame,
+        }
+    }
+
+    fn two_display_set() -> crate::display::DisplaySet {
+        let built_in = display("Built-in", rect(0.0, 0.0, 1000.0, 800.0));
+        let external = display("External", rect(1000.0, 0.0, 2200.0, 900.0));
+        crate::display::DisplaySet::new(built_in.clone(), built_in, vec![external])
+    }
+
+    #[test]
+    fn fast_drag_jump_uses_anchor_and_does_not_persist_until_release() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.settings_path = None;
+        app.install_display_set_for_test(two_display_set());
+        app.physics.position = Vec2 { x: 120.0, y: 90.0 };
+        app.physics.size = Vec2 { x: 128.0, y: 128.0 };
+
+        app.start_drag_session(Vec2 { x: 132.0, y: 124.0 });
+        app.update_drag_position(Vec2 {
+            x: 1500.0,
+            y: 260.0,
+        });
+
+        assert_eq!(
+            app.physics.position,
+            Vec2 {
+                x: 1488.0,
+                y: 226.0,
+            },
+        );
+        assert_eq!(app.settings.last_position, None);
+    }
+
+    #[test]
+    fn active_drag_poll_updates_position_between_cursor_events() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.settings_path = None;
+        app.install_display_set_for_test(two_display_set());
+        app.physics.position = Vec2 { x: 120.0, y: 90.0 };
+        app.physics.size = Vec2 { x: 128.0, y: 128.0 };
+        app.interaction
+            .mouse_pressed(Vec2 { x: 132.0, y: 124.0 }, MouseButtonKind::Left, true);
+        app.pet.set_dragging(true);
+        app.start_drag_session(Vec2 { x: 132.0, y: 124.0 });
+
+        app.update_drag_from_system_state(
+            true,
+            Some(Vec2 {
+                x: 1500.0,
+                y: 260.0,
+            }),
+        );
+
+        assert_eq!(
+            app.physics.position,
+            Vec2 {
+                x: 1488.0,
+                y: 226.0,
+            },
+        );
+        assert!(app.interaction.is_dragging());
+        assert_eq!(app.settings.last_position, None);
+    }
+
+    #[test]
+    fn current_display_drag_crosses_to_external_display_and_adopts_it_on_release() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.settings_path = None;
+        app.install_display_set_for_test(two_display_set());
+        app.physics.position = Vec2 { x: 120.0, y: 90.0 };
+        app.physics.size = Vec2 { x: 128.0, y: 128.0 };
+        app.settings.monitor_behavior = crate::settings::MonitorBehavior::CurrentDisplay;
+
+        app.start_drag_session(Vec2 { x: 132.0, y: 124.0 });
+        app.update_drag_position(Vec2 {
+            x: 1500.0,
+            y: 260.0,
+        });
+        app.finish_drag_session(Vec2 {
+            x: 1500.0,
+            y: 260.0,
+        });
+
+        assert_eq!(app.active_monitor_name.as_deref(), Some("External"));
+        assert_eq!(
+            app.physics.bounds,
+            Bounds {
+                min_x: 1000.0,
+                min_y: 0.0,
+                max_x: 2200.0,
+                max_y: 900.0,
+            }
+        );
         assert_eq!(
             app.settings.last_position,
             Some(crate::settings::StoredPosition {
-                x: 120.0,
-                y: 90.0,
-                display_name: None,
+                x: 1488.0,
+                y: 226.0,
+                display_name: Some("External".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn primary_display_drag_stays_inside_primary_display() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.settings_path = None;
+        app.install_display_set_for_test(two_display_set());
+        app.physics.position = Vec2 { x: 120.0, y: 90.0 };
+        app.physics.size = Vec2 { x: 128.0, y: 128.0 };
+        app.settings.monitor_behavior = crate::settings::MonitorBehavior::PrimaryDisplay;
+
+        app.start_drag_session(Vec2 { x: 132.0, y: 124.0 });
+        app.update_drag_position(Vec2 {
+            x: 1500.0,
+            y: 260.0,
+        });
+        app.finish_drag_session(Vec2 {
+            x: 1500.0,
+            y: 260.0,
+        });
+
+        assert_eq!(app.physics.position, Vec2 { x: 872.0, y: 226.0 },);
+        assert_eq!(app.active_monitor_name.as_deref(), Some("Built-in"));
+    }
+
+    #[test]
+    fn lost_mouse_release_guard_ends_drag_and_persists_position() {
+        let mut app = DesktopPetApp::new_for_test();
+        app.settings_path = None;
+        app.install_display_set_for_test(two_display_set());
+        app.physics.position = Vec2 { x: 120.0, y: 90.0 };
+        app.physics.size = Vec2 { x: 128.0, y: 128.0 };
+        app.interaction
+            .mouse_pressed(Vec2 { x: 132.0, y: 124.0 }, MouseButtonKind::Left, true);
+        app.pet.set_dragging(true);
+        app.start_drag_session(Vec2 { x: 132.0, y: 124.0 });
+        app.update_drag_position(Vec2 { x: 420.0, y: 260.0 });
+
+        app.reconcile_drag_button_state(false, Vec2 { x: 420.0, y: 260.0 });
+
+        assert!(!app.interaction.is_dragging());
+        assert!(app.drag_session.is_none());
+        assert_eq!(app.pet.behavior_mode(), crate::pet::BehaviorMode::Default);
+        assert_eq!(
+            app.settings.last_position,
+            Some(crate::settings::StoredPosition {
+                x: 408.0,
+                y: 226.0,
+                display_name: Some("Built-in".to_string()),
             })
         );
     }

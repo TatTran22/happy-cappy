@@ -5,6 +5,7 @@ pub mod bubble_window_macos;
 pub mod bundle;
 pub mod command_target_macos;
 pub mod control_socket;
+pub mod display;
 pub mod interaction;
 pub mod menu_bar;
 pub mod micro_action;
